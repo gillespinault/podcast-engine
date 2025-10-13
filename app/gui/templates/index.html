@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} - Text to Podcast</title>
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- HTMX -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+
+    <!-- Alpine.js (for interactivity) -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-6xl">
+        <!-- Header -->
+        <header class="mb-12 text-center">
+            <h1 class="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                🎙️ {{ app_name }}
+            </h1>
+            <p class="text-gray-400 text-lg">Transform text into professional podcasts with AI-powered voices</p>
+            <p class="text-gray-500 text-sm mt-2">v{{ app_version }}</p>
+        </header>
+
+        <!-- Main Form -->
+        <div x-data="podcastForm()" class="space-y-8">
+
+            <!-- Text Input -->
+            <section class="bg-gray-800 rounded-lg p-6 shadow-xl">
+                <h2 class="text-2xl font-semibold mb-4 flex items-center">
+                    <span class="bg-blue-500 text-white rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">1</span>
+                    Your Text
+                </h2>
+                <textarea
+                    x-model="form.text"
+                    rows="12"
+                    placeholder="Paste your article, blog post, or any text here... (minimum 100 characters)"
+                    class="w-full bg-gray-700 text-gray-100 rounded-lg p-4 border border-gray-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none transition"
+                ></textarea>
+                <div class="mt-2 text-sm text-gray-400 flex justify-between">
+                    <span x-text="`${form.text.length} characters`"></span>
+                    <span x-text="`~${Math.ceil(form.text.split(' ').length / 150)} min read`"></span>
+                </div>
+            </section>
+
+            <!-- Metadata -->
+            <section class="bg-gray-800 rounded-lg p-6 shadow-xl">
+                <h2 class="text-2xl font-semibold mb-4 flex items-center">
+                    <span class="bg-purple-500 text-white rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">2</span>
+                    Podcast Details
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Title *</label>
+                        <input
+                            type="text"
+                            x-model="form.metadata.title"
+                            placeholder="My Amazing Podcast"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                            required
+                        >
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Author</label>
+                        <input
+                            type="text"
+                            x-model="form.metadata.author"
+                            placeholder="John Doe"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        >
+                    </div>
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium mb-2">Description</label>
+                        <textarea
+                            x-model="form.metadata.description"
+                            rows="2"
+                            placeholder="A brief description of your podcast..."
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        ></textarea>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Language</label>
+                        <select
+                            x-model="form.metadata.language"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        >
+                            <option value="en">English</option>
+                            <option value="fr">Français</option>
+                            <option value="es">Español</option>
+                            <option value="de">Deutsch</option>
+                            <option value="it">Italiano</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Genre</label>
+                        <input
+                            type="text"
+                            x-model="form.metadata.genre"
+                            placeholder="Audiobook, Technology, Education..."
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500 focus:outline-none"
+                        >
+                    </div>
+                </div>
+            </section>
+
+            <!-- Voice & Audio Options -->
+            <section class="bg-gray-800 rounded-lg p-6 shadow-xl">
+                <h2 class="text-2xl font-semibold mb-4 flex items-center">
+                    <span class="bg-green-500 text-white rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">3</span>
+                    Voice & Audio Settings
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="md:col-span-2">
+                        <label class="block text-sm font-medium mb-2">Voice</label>
+                        <select
+                            x-model="form.tts_options.voice"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                            <template x-for="(voiceInfo, voiceId) in availableVoices" :key="voiceId">
+                                <option :value="voiceId" x-text="`${voiceInfo.name} (${voiceInfo.gender}, ${voiceInfo.accent})`"></option>
+                            </template>
+                        </select>
+                        <p class="text-xs text-gray-400 mt-1" x-text="`${Object.keys(availableVoices).length} voices available`"></p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Speed</label>
+                        <input
+                            type="number"
+                            x-model.number="form.tts_options.speed"
+                            min="0.5"
+                            max="2.0"
+                            step="0.1"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                        <span class="text-xs text-gray-400" x-text="`${form.tts_options.speed}x`"></span>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Format</label>
+                        <select
+                            x-model="form.audio_options.format"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                            {% for format_id, format_info in audio_formats.items() %}
+                            <option value="{{ format_id }}">{{ format_id.upper() }} ({{ format_info.best_for }})</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Bitrate</label>
+                        <select
+                            x-model="form.audio_options.bitrate"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                            <option value="32k">32k (Low)</option>
+                            <option value="64k">64k (Good)</option>
+                            <option value="128k">128k (High)</option>
+                            <option value="192k">192k (Very High)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Chunk Size</label>
+                        <input
+                            type="number"
+                            x-model.number="form.tts_options.chunk_size"
+                            min="1000"
+                            max="10000"
+                            step="500"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                    </div>
+                </div>
+
+                <!-- Advanced Options (Collapsible) -->
+                <div x-data="{ open: false }" class="mt-4">
+                    <button
+                        @click="open = !open"
+                        class="text-sm text-blue-400 hover:text-blue-300 transition"
+                    >
+                        <span x-text="open ? '▼ Hide Advanced Options' : '▶ Show Advanced Options'"></span>
+                    </button>
+                    <div x-show="open" x-cloak x-transition class="mt-4 space-y-3">
+                        <label class="flex items-center space-x-2">
+                            <input type="checkbox" x-model="form.tts_options.preserve_sentence" class="rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500">
+                            <span class="text-sm">Preserve sentence boundaries</span>
+                        </label>
+                        <label class="flex items-center space-x-2">
+                            <input type="checkbox" x-model="form.tts_options.add_chapter_markers" class="rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500">
+                            <span class="text-sm">Add chapter markers</span>
+                        </label>
+                        <label class="flex items-center space-x-2">
+                            <input type="checkbox" x-model="form.tts_options.remove_urls" class="rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500">
+                            <span class="text-sm">Remove URLs from text</span>
+                        </label>
+                        <label class="flex items-center space-x-2">
+                            <input type="checkbox" x-model="form.audio_options.embed_cover" class="rounded bg-gray-700 border-gray-600 text-green-500 focus:ring-green-500">
+                            <span class="text-sm">Embed cover art</span>
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Submit Button -->
+            <div class="text-center">
+                <button
+                    @click="submitForm()"
+                    :disabled="isProcessing || form.text.length < 100"
+                    class="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-12 py-4 rounded-lg font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                >
+                    <span x-show="!isProcessing">🎙️ Create Podcast</span>
+                    <span x-show="isProcessing" x-cloak>
+                        <svg class="animate-spin inline-block w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Processing...
+                    </span>
+                </button>
+                <p class="text-sm text-gray-400 mt-3" x-show="form.text.length < 100" x-cloak>
+                    Minimum 100 characters required
+                </p>
+            </div>
+
+            <!-- Result -->
+            <div x-show="result" x-cloak class="bg-green-900 bg-opacity-30 border border-green-500 rounded-lg p-6 shadow-xl">
+                <h3 class="text-2xl font-semibold mb-4 text-green-400">✅ Podcast Created!</h3>
+                <div class="space-y-2 text-sm">
+                    <p><strong>File:</strong> <span x-text="result?.podcast?.filename"></span></p>
+                    <p><strong>Duration:</strong> <span x-text="formatDuration(result?.podcast?.duration_seconds)"></span></p>
+                    <p><strong>Size:</strong> <span x-text="formatBytes(result?.podcast?.file_size)"></span></p>
+                    <p><strong>Processing Time:</strong> <span x-text="`${result?.processing?.processing_time_seconds?.toFixed(1)}s`"></span></p>
+                </div>
+                <a
+                    :href="`/data/shared/podcasts/final/${result?.podcast?.filename}`"
+                    download
+                    class="mt-4 inline-block bg-green-500 hover:bg-green-600 text-white px-6 py-2 rounded-lg transition"
+                >
+                    📥 Download Podcast
+                </a>
+            </div>
+
+            <!-- Error -->
+            <div x-show="error" x-cloak class="bg-red-900 bg-opacity-30 border border-red-500 rounded-lg p-6 shadow-xl">
+                <h3 class="text-2xl font-semibold mb-2 text-red-400">❌ Error</h3>
+                <p x-text="error" class="text-sm"></p>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <footer class="mt-16 text-center text-gray-500 text-sm">
+            <p>Powered by <strong>Kokoro TTS</strong> • Made with ❤️ by ServerLab</p>
+        </footer>
+    </div>
+
+    <script>
+        function podcastForm() {
+            return {
+                form: {
+                    text: '',
+                    metadata: {
+                        title: '',
+                        author: '',
+                        description: '',
+                        language: 'en',
+                        genre: 'Audiobook',
+                        narrator: 'Kokoro TTS',
+                    },
+                    tts_options: {
+                        voice: '{{ default_voice }}',
+                        speed: {{ default_speed }},
+                        chunk_size: 4000,
+                        preserve_sentence: true,
+                        add_chapter_markers: true,
+                        remove_urls: true,
+                        remove_markdown: true,
+                    },
+                    audio_options: {
+                        format: 'm4b',
+                        bitrate: '{{ default_bitrate }}',
+                        sample_rate: 24000,
+                        channels: 1,
+                        embed_cover: true,
+                    },
+                    processing_options: {
+                        async_mode: false,
+                        max_parallel_tts: 5,
+                        return_binary: false,
+                    }
+                },
+                allVoices: {},
+                availableVoices: {},
+                isProcessing: false,
+                result: null,
+                error: null,
+
+                async init() {
+                    // Fetch all voices on component init
+                    await this.fetchVoices();
+
+                    // Watch for language changes
+                    this.$watch('form.metadata.language', (newLang) => {
+                        this.filterVoicesByLanguage(newLang);
+                    });
+                },
+
+                async fetchVoices() {
+                    try {
+                        const response = await fetch('/api/v1/voices');
+                        if (response.ok) {
+                            this.allVoices = await response.json();
+                            this.filterVoicesByLanguage(this.form.metadata.language);
+                        }
+                    } catch (err) {
+                        console.error('Failed to fetch voices:', err);
+                    }
+                },
+
+                filterVoicesByLanguage(language) {
+                    // Filter voices by selected language
+                    this.availableVoices = Object.fromEntries(
+                        Object.entries(this.allVoices).filter(([voiceId, voiceInfo]) =>
+                            voiceInfo.language === language
+                        )
+                    );
+
+                    // If current voice is not in filtered list, select first available
+                    if (!this.availableVoices[this.form.tts_options.voice]) {
+                        const firstVoice = Object.keys(this.availableVoices)[0];
+                        if (firstVoice) {
+                            this.form.tts_options.voice = firstVoice;
+                        }
+                    }
+                },
+
+                async submitForm() {
+                    this.isProcessing = true;
+                    this.result = null;
+                    this.error = null;
+
+                    try {
+                        const response = await fetch('/api/v1/create-podcast', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(this.form)
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(errorData.detail || 'Unknown error');
+                        }
+
+                        const data = await response.json();
+                        this.result = data;
+
+                        // Scroll to result
+                        setTimeout(() => {
+                            document.querySelector('[x-show="result"]').scrollIntoView({ behavior: 'smooth' });
+                        }, 100);
+
+                    } catch (err) {
+                        this.error = err.message;
+                        console.error('Error creating podcast:', err);
+                    } finally {
+                        this.isProcessing = false;
+                    }
+                },
+
+                formatDuration(seconds) {
+                    const mins = Math.floor(seconds / 60);
+                    const secs = Math.floor(seconds % 60);
+                    return `${mins}m ${secs}s`;
+                },
+
+                formatBytes(bytes) {
+                    if (bytes === 0) return '0 Bytes';
+                    const k = 1024;
+                    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+                    const i = Math.floor(Math.log(bytes) / Math.log(k));
+                    return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+                }
+            }
+        }
+    </script>
+</body>
+</html>
