@@ -406,16 +406,23 @@ async def _process_podcast_job_async(
 
         # Step 2: TTS synthesis (parallel)
         logger.info(f"[{job_id}] Step 2: Synthesizing audio (parallel, max={podcast_req.processing_options.max_parallel_tts})")
-        tts_client = app_state.tts_client
 
-        tts_results = await tts_client.synthesize_chunks_parallel(
-            chunks=chunks,
-            output_dir=chunks_dir,
-            voice=podcast_req.tts_options.voice,
-            speed=podcast_req.tts_options.speed,
-            max_parallel=podcast_req.processing_options.max_parallel_tts,
-            pause_between=podcast_req.tts_options.pause_between_chunks,
-        )
+        # CRITICAL FIX: Create dedicated TTS client for this job to avoid shared httpx.AsyncClient deadlocks
+        # When multiple jobs run concurrently, sharing app_state.tts_client causes connection pool exhaustion
+        tts_client = KokoroTTSClient()
+
+        try:
+            tts_results = await tts_client.synthesize_chunks_parallel(
+                chunks=chunks,
+                output_dir=chunks_dir,
+                voice=podcast_req.tts_options.voice,
+                speed=podcast_req.tts_options.speed,
+                max_parallel=podcast_req.processing_options.max_parallel_tts,
+                pause_between=podcast_req.tts_options.pause_between_chunks,
+            )
+        finally:
+            # Always close the dedicated client to free resources
+            await tts_client.close()
 
         # Check for failures
         failed_chunks = [r for r in tts_results if not r[2]]
