@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +26,8 @@ from app.api.models import (
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
+import httpx
+import asyncio
 
 
 # Application startup/shutdown
@@ -353,10 +355,262 @@ async def create_podcast(request: Request, podcast_req: PodcastRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _process_podcast_job_async(
+    job_id: str,
+    podcast_req: WebhookPodcastRequest,
+    app_state,
+    callback_url: str = None,
+    callbacks: dict = None
+):
+    """
+    Background task for async podcast processing
+
+    This function processes the podcast job asynchronously and sends
+    a webhook callback when complete (success or failure).
+
+    Args:
+        job_id: Unique job identifier
+        podcast_req: Podcast request with all options
+        app_state: FastAPI app.state (for tts_client access)
+        callback_url: Webhook URL to notify on completion
+        callbacks: Original callbacks (source_workflow_id, etc.)
+    """
+    start_time = time.time()
+    logger.info(f"[{job_id}] Starting async podcast processing: {podcast_req.metadata.title}")
+
+    try:
+        # Create job directory
+        job_dir = Path(settings.temp_dir) / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        chunks_dir = job_dir / "chunks"
+        chunks_dir.mkdir(exist_ok=True)
+
+        # Step 1: Text chunking
+        logger.info(f"[{job_id}] Step 1: Chunking text ({len(podcast_req.text)} chars)")
+        chunker = TextChunker(
+            max_chunk_size=podcast_req.tts_options.chunk_size,
+            preserve_sentence=podcast_req.tts_options.preserve_sentence,
+            remove_urls=podcast_req.tts_options.remove_urls,
+            remove_markdown=podcast_req.tts_options.remove_markdown,
+        )
+
+        chunks = chunker.create_chunks(
+            text=podcast_req.text,
+            add_chapter_markers=podcast_req.tts_options.add_chapter_markers
+        )
+
+        if not chunks:
+            raise ValueError("No text chunks generated")
+
+        logger.info(f"[{job_id}] Generated {len(chunks)} chunks")
+
+        # Step 2: TTS synthesis (parallel)
+        logger.info(f"[{job_id}] Step 2: Synthesizing audio (parallel, max={podcast_req.processing_options.max_parallel_tts})")
+        tts_client = app_state.tts_client
+
+        tts_results = await tts_client.synthesize_chunks_parallel(
+            chunks=chunks,
+            output_dir=chunks_dir,
+            voice=podcast_req.tts_options.voice,
+            speed=podcast_req.tts_options.speed,
+            max_parallel=podcast_req.processing_options.max_parallel_tts,
+            pause_between=podcast_req.tts_options.pause_between_chunks,
+        )
+
+        # Check for failures
+        failed_chunks = [r for r in tts_results if not r[2]]
+        if failed_chunks:
+            logger.warning(f"[{job_id}] {len(failed_chunks)} chunks failed TTS")
+
+        # Get successful audio files
+        audio_files = [r[1] for r in tts_results if r[2]]
+
+        if not audio_files:
+            raise ValueError("No audio chunks generated")
+
+        # Step 3: Merge audio
+        logger.info(f"[{job_id}] Step 3: Merging {len(audio_files)} audio files")
+        audio_processor = AudioProcessor()
+
+        output_filename = f"{podcast_req.metadata.title.replace(' ', '-').lower()}-{job_id[:8]}{AUDIO_FORMATS[podcast_req.audio_options.format]['extension']}"
+        output_path = Path(settings.final_dir) / output_filename
+
+        merged_audio = await audio_processor.merge_audio_files(
+            input_files=audio_files,
+            output_path=output_path,
+            format=podcast_req.audio_options.format,
+            bitrate=podcast_req.audio_options.bitrate,
+            sample_rate=podcast_req.audio_options.sample_rate,
+            channels=podcast_req.audio_options.channels,
+            add_silence_start=podcast_req.audio_options.add_silence_start,
+            add_silence_end=podcast_req.audio_options.add_silence_end,
+        )
+
+        # Step 4: Embed metadata
+        logger.info(f"[{job_id}] Step 4: Embedding metadata")
+
+        # Download cover image if URL provided
+        cover_image_path = None
+        if podcast_req.metadata.cover_image_url and podcast_req.audio_options.embed_cover:
+            cover_image_path = job_dir / "cover.jpg"
+            cover_image_path = await audio_processor.download_cover_image(
+                str(podcast_req.metadata.cover_image_url),
+                cover_image_path
+            )
+
+        audio_processor.embed_metadata(
+            audio_path=merged_audio,
+            title=podcast_req.metadata.title,
+            author=podcast_req.metadata.author,
+            description=podcast_req.metadata.description,
+            album=podcast_req.metadata.publisher,
+            genre=podcast_req.metadata.genre,
+            narrator=podcast_req.metadata.narrator,
+            publisher=podcast_req.metadata.publisher,
+            copyright=podcast_req.metadata.copyright,
+            publication_date=podcast_req.metadata.publication_date,
+            cover_image_path=cover_image_path,
+        )
+
+        # Step 5: Get audio duration
+        duration = await audio_processor.get_audio_duration(merged_audio)
+
+        # Step 6: Cleanup temporary files
+        logger.info(f"[{job_id}] Cleaning up temporary files")
+        import shutil
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+        # Calculate stats
+        processing_time = time.time() - start_time
+        stats = ProcessingStats(
+            total_chunks=len(chunks),
+            successful_chunks=len(audio_files),
+            failed_chunks=len(failed_chunks),
+            total_duration_seconds=duration,
+            processing_time_seconds=processing_time,
+            tts_api_calls=len(chunks),
+            average_chunk_time=processing_time / len(chunks) if chunks else 0,
+            text_length_chars=len(podcast_req.text),
+            text_length_words=len(podcast_req.text.split()),
+            estimated_listening_time_minutes=duration / 60,
+        )
+
+        logger.success(f"[{job_id}] Async podcast created successfully in {processing_time:.1f}s")
+
+        # Build podcast data for callback
+        podcast_data = {
+            "filename": output_filename,
+            "file_path": str(merged_audio),
+            "file_size": merged_audio.stat().st_size,
+            "duration_seconds": duration,
+            "format": podcast_req.audio_options.format,
+        }
+
+        # Send webhook callback on success
+        if callback_url:
+            await send_webhook_callback(
+                callback_url=str(callback_url),
+                job_id=job_id,
+                success=True,
+                podcast_data=podcast_data,
+                processing_stats=stats,
+                callbacks=callbacks
+            )
+
+    except Exception as e:
+        logger.error(f"[{job_id}] Async podcast creation failed: {e}")
+
+        # Cleanup on error
+        if podcast_req.processing_options.cleanup_on_error:
+            import shutil
+            job_dir = Path(settings.temp_dir) / job_id
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+        # Send webhook callback on failure
+        if callback_url:
+            await send_webhook_callback(
+                callback_url=str(callback_url),
+                job_id=job_id,
+                success=False,
+                error=str(e),
+                callbacks=callbacks
+            )
+
+
+async def send_webhook_callback(
+    callback_url: str,
+    job_id: str,
+    success: bool,
+    podcast_data: dict = None,
+    processing_stats: ProcessingStats = None,
+    callbacks: dict = None,
+    error: str = None,
+    max_retries: int = 3
+):
+    """
+    Send webhook callback with retry logic (exponential backoff)
+
+    Args:
+        callback_url: Webhook URL to POST results
+        job_id: Job identifier
+        success: True if processing succeeded, False otherwise
+        podcast_data: Podcast information (filename, file_path, etc.)
+        processing_stats: Processing statistics
+        callbacks: Original callbacks (source_workflow_id, source_item_id)
+        error: Error message if success=False
+        max_retries: Maximum retry attempts (default: 3)
+    """
+    payload = {
+        "job_id": job_id,
+        "success": success,
+        "timestamp": time.time(),
+    }
+
+    if success:
+        payload["podcast"] = podcast_data
+        if processing_stats:
+            payload["processing"] = processing_stats.model_dump()
+        if callbacks:
+            payload["callbacks"] = callbacks
+    else:
+        payload["error"] = error
+
+    # Retry with exponential backoff: 1s, 2s, 4s
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"[{job_id}] Sending webhook callback to {callback_url} (attempt {attempt}/{max_retries})")
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    callback_url,
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                )
+
+                if response.status_code in [200, 201, 202, 204]:
+                    logger.success(f"[{job_id}] Webhook callback delivered successfully (status {response.status_code})")
+                    return True
+                else:
+                    logger.warning(f"[{job_id}] Webhook callback returned status {response.status_code}: {response.text[:200]}")
+
+        except Exception as e:
+            logger.error(f"[{job_id}] Webhook callback attempt {attempt} failed: {e}")
+
+        # Wait before retry (exponential backoff)
+        if attempt < max_retries:
+            wait_time = 2 ** (attempt - 1)  # 1s, 2s, 4s
+            logger.info(f"[{job_id}] Retrying webhook callback in {wait_time}s...")
+            await asyncio.sleep(wait_time)
+
+    logger.error(f"[{job_id}] Webhook callback failed after {max_retries} attempts")
+    return False
+
+
 @app.post("/api/v1/webhook/create-podcast", response_model=WebhookPodcastResponse, tags=["Webhook"])
 async def webhook_create_podcast(
     request: Request,
     podcast_req: WebhookPodcastRequest,
+    background_tasks: BackgroundTasks,
     x_api_key: str = Header(None, alias="X-API-KEY")
 ):
     """
@@ -368,9 +622,16 @@ async def webhook_create_podcast(
     - Optional callbacks tracking (source_workflow_id, source_item_id)
     - Optional base64 binary response (for direct upload)
     - Optional chapters support (PDF+LLM use case)
+    - Async mode support (background processing with webhook callback)
 
     Authentication:
         Requires X-API-KEY header matching PODCAST_ENGINE_API_KEY env var
+
+    Async Mode:
+        If processing_options.async_mode = True:
+        - Returns immediately with job_id
+        - Processes in background
+        - Sends webhook callback to processing_options.callback_url when complete
 
     Returns:
         WebhookPodcastResponse with optional binary_data field
@@ -394,6 +655,43 @@ async def webhook_create_podcast(
     logger.info(f"[{job_id}] Webhook podcast request: {podcast_req.metadata.title}")
     if podcast_req.callbacks:
         logger.info(f"[{job_id}] Callbacks: workflow={podcast_req.callbacks.source_workflow_id}, item={podcast_req.callbacks.source_item_id}")
+
+    # ============================================================================
+    # ASYNC MODE: Return immediately and process in background
+    # ============================================================================
+    if podcast_req.processing_options.async_mode:
+        logger.info(f"[{job_id}] Async mode enabled - submitting job to background")
+
+        # Validate callback_url if async mode
+        callback_url = podcast_req.processing_options.callback_url
+        if not callback_url:
+            raise HTTPException(
+                status_code=400,
+                detail="callback_url is required when async_mode=true"
+            )
+
+        # Launch background task
+        background_tasks.add_task(
+            _process_podcast_job_async,
+            job_id=job_id,
+            podcast_req=podcast_req,
+            app_state=request.app.state,
+            callback_url=str(callback_url),
+            callbacks=podcast_req.callbacks.model_dump() if podcast_req.callbacks else None
+        )
+
+        # Return immediately with job_id
+        return WebhookPodcastResponse(
+            success=True,
+            job_id=job_id,
+            message=f"Job {job_id} submitted for async processing. Callback will be sent to {callback_url} when complete.",
+            callbacks=podcast_req.callbacks
+        )
+
+    # ============================================================================
+    # SYNC MODE: Process synchronously (original behavior)
+    # ============================================================================
+    logger.info(f"[{job_id}] Sync mode - processing immediately")
 
     try:
         # Create job directory
