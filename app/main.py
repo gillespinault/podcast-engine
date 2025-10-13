@@ -78,9 +78,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files (for GUI)
+# Mount static files (for GUI) - only if directory exists
 if settings.enable_gui:
-    app.mount("/static", StaticFiles(directory="app/static"), name="static")
+    static_dir = Path("app/static")
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory="app/static"), name="static")
+    else:
+        logger.warning("Static directory 'app/static' not found - static files disabled")
 
 
 # Exception handler
