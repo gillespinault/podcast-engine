@@ -83,6 +83,8 @@ class KokoroTTSClient:
                 "speed": speed,
             }
 
+            logger.debug(f"[TTS] About to call client.post() for {len(text)} chars")
+
             # Make request
             response = await self.client.post(
                 self.api_url,
@@ -90,7 +92,11 @@ class KokoroTTSClient:
                 headers={"Content-Type": "application/json"}
             )
 
+            logger.debug(f"[TTS] client.post() returned, status={response.status_code}")
+
             response.raise_for_status()
+
+            logger.debug(f"[TTS] raise_for_status() passed")
 
             # Return audio bytes
             audio_data = response.content
