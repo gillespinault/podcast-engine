@@ -518,23 +518,36 @@ async def _process_podcast_job_async(
             )
 
     except Exception as e:
-        logger.error(f"[{job_id}] Async podcast creation failed: {e}")
+        # CRITICAL: Log with full traceback for debugging
+        logger.exception(f"[{job_id}] ❌ ASYNC JOB FAILED - Exception caught in background task")
+        logger.error(f"[{job_id}] Error type: {type(e).__name__}")
+        logger.error(f"[{job_id}] Error message: {str(e)}")
 
         # Cleanup on error
-        if podcast_req.processing_options.cleanup_on_error:
-            import shutil
-            job_dir = Path(settings.temp_dir) / job_id
-            shutil.rmtree(job_dir, ignore_errors=True)
+        try:
+            if podcast_req.processing_options.cleanup_on_error:
+                import shutil
+                job_dir = Path(settings.temp_dir) / job_id
+                if job_dir.exists():
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                    logger.info(f"[{job_id}] Cleaned up job directory")
+        except Exception as cleanup_error:
+            logger.error(f"[{job_id}] Cleanup failed: {cleanup_error}")
 
-        # Send webhook callback on failure
+        # ALWAYS send webhook callback on failure (even if cleanup fails)
         if callback_url:
-            await send_webhook_callback(
-                callback_url=str(callback_url),
-                job_id=job_id,
-                success=False,
-                error=str(e),
-                callbacks=callbacks
-            )
+            try:
+                await send_webhook_callback(
+                    callback_url=str(callback_url),
+                    job_id=job_id,
+                    success=False,
+                    error=f"{type(e).__name__}: {str(e)}",
+                    callbacks=callbacks
+                )
+            except Exception as callback_error:
+                logger.error(f"[{job_id}] Failed to send error callback: {callback_error}")
+        else:
+            logger.warning(f"[{job_id}] No callback_url configured - error not reported to n8n")
 
 
 async def send_webhook_callback(
