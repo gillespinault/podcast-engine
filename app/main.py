@@ -26,6 +26,7 @@ from app.api.models import (
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
+from app.worker import enqueue_podcast_job  # RQ job queue
 import httpx
 import asyncio
 
@@ -630,7 +631,6 @@ async def send_webhook_callback(
 async def webhook_create_podcast(
     request: Request,
     podcast_req: WebhookPodcastRequest,
-    background_tasks: BackgroundTasks,
     x_api_key: str = Header(None, alias="X-API-KEY")
 ):
     """
@@ -677,10 +677,10 @@ async def webhook_create_podcast(
         logger.info(f"[{job_id}] Callbacks: workflow={podcast_req.callbacks.source_workflow_id}, item={podcast_req.callbacks.source_item_id}")
 
     # ============================================================================
-    # ASYNC MODE: Return immediately and process in background
+    # ASYNC MODE: Return immediately and enqueue in Redis Queue
     # ============================================================================
     if podcast_req.processing_options.async_mode:
-        logger.info(f"[{job_id}] Async mode enabled - submitting job to background")
+        logger.info(f"[{job_id}] Async mode enabled - enqueuing job in Redis Queue")
 
         # Validate callback_url if async mode
         callback_url = podcast_req.processing_options.callback_url
@@ -690,21 +690,26 @@ async def webhook_create_podcast(
                 detail="callback_url is required when async_mode=true"
             )
 
-        # Launch background task
-        background_tasks.add_task(
-            _process_podcast_job_async,
-            job_id=job_id,
-            podcast_req=podcast_req,
-            app_state=request.app.state,
-            callback_url=str(callback_url),
-            callbacks=podcast_req.callbacks.model_dump() if podcast_req.callbacks else None
-        )
+        # Enqueue job in Redis Queue (persistent, retryable)
+        try:
+            rq_job = enqueue_podcast_job(
+                job_id=job_id,
+                podcast_req=podcast_req,
+                callback_url=str(callback_url)
+            )
+            logger.info(f"[{job_id}] RQ Job enqueued: {rq_job.get_status()}")
+        except Exception as e:
+            logger.error(f"[{job_id}] Failed to enqueue job: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to enqueue job: {str(e)}"
+            )
 
         # Return immediately with job_id
         return WebhookPodcastResponse(
             success=True,
             job_id=job_id,
-            message=f"Job {job_id} submitted for async processing. Callback will be sent to {callback_url} when complete.",
+            message=f"Job {job_id} enqueued in Redis Queue (persistent, 3x retry). Callback will be sent to {callback_url} when complete.",
             callbacks=podcast_req.callbacks
         )
 

@@ -27,6 +27,10 @@ python-slugify==8.0.4    # URL-safe filenames
 loguru==0.7.2            # Better logging
 tenacity==9.0.0          # Retry logic
 
+# Job Queue (Redis Queue)
+redis==5.2.0             # Redis client
+rq==2.0.0                # Redis Queue for background jobs
+
 # Testing (httpx already included above for runtime)
 pytest==8.3.3
 pytest-asyncio==0.24.0

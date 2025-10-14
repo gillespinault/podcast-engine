@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     )
     kokoro_timeout: int = Field(default=120, ge=10, le=600, description="Kokoro API timeout (seconds)")
 
+    # Redis Queue (Job Persistence)
+    redis_host: str = Field(default="projects-redis", description="Redis host")
+    redis_port: int = Field(default=6379, ge=1, le=65535, description="Redis port")
+    redis_db: int = Field(default=0, ge=0, le=15, description="Redis database number")
+    redis_password: Optional[str] = Field(default=None, description="Redis password (optional)")
+
     # Storage
     storage_base_path: str = Field(default="/data/shared/podcasts", description="Base storage directory")
     temp_dir: str = Field(default="/data/shared/podcasts/jobs", description="Temporary files directory")
