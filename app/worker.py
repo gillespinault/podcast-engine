@@ -435,6 +435,7 @@ def enqueue_podcast_job(
 
     job = podcast_queue.enqueue(
         process_podcast_job,
+        job_id=job_id,  # Use custom job_id so Job.fetch() works correctly
         kwargs={
             'job_id': job_id,
             'podcast_req_dict': podcast_req.model_dump(),
