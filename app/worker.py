@@ -60,7 +60,14 @@ def update_job_progress(job_id: str, current_step: int, step_name: str, progress
         estimated_time_remaining: Estimated seconds remaining (optional)
     """
     try:
-        job = Job.fetch(job_id, connection=redis_conn)
+        # CRITICAL FIX: Use get_current_job() to retrieve job from RQ context
+        # instead of Job.fetch() which can fail when job is actively running
+        job = get_current_job(connection=redis_conn)
+        if not job:
+            # Fallback to Job.fetch() if not running in a worker context
+            logger.warning(f"[{job_id}] No current job in context, using Job.fetch() as fallback")
+            job = Job.fetch(job_id, connection=redis_conn)
+
         job.meta["progress"] = {
             "current_step": current_step,
             "total_steps": 6,
@@ -69,9 +76,9 @@ def update_job_progress(job_id: str, current_step: int, step_name: str, progress
             "estimated_time_remaining": estimated_time_remaining
         }
         job.save_meta()
-        logger.debug(f"[{job_id}] Progress updated: Step {current_step}/6 ({progress_percent}%) - {step_name}")
+        logger.debug(f"[{job.id}] Progress updated: Step {current_step}/6 ({progress_percent}%) - {step_name}")
     except Exception as e:
-        logger.warning(f"[{job_id}] Failed to update progress: {e}")
+        logger.error(f"[{job_id}] Failed to update progress: {e}", exc_info=True)
 
 
 @retry(
