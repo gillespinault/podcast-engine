@@ -5,7 +5,7 @@ Starts RQ workers to process podcast jobs from Redis Queue
 """
 import sys
 from loguru import logger
-from rq import Worker, Queue, Connection
+from rq import Worker, Queue
 from app.worker import redis_conn
 from app.config import settings
 
@@ -22,15 +22,14 @@ if __name__ == "__main__":
     logger.info(f"Redis: {settings.redis_host}:{settings.redis_port}/{settings.redis_db}")
     logger.info(f"Queue: podcast_processing")
 
-    # Listen to podcast_processing queue
-    with Connection(redis_conn):
-        worker = Worker(
-            queues=['podcast_processing'],
-            connection=redis_conn,
-            name=f"podcast-worker-{settings.api_host}",
-        )
-        logger.info(f"✓ Worker registered: {worker.name}")
-        logger.info("📝 Listening for jobs...")
+    # Listen to podcast_processing queue (RQ 2.0 doesn't need Connection context)
+    worker = Worker(
+        queues=['podcast_processing'],
+        connection=redis_conn,
+        name=f"podcast-worker-{settings.api_host}",
+    )
+    logger.info(f"✓ Worker registered: {worker.name}")
+    logger.info("📝 Listening for jobs...")
 
-        # Start listening (blocking)
-        worker.work(with_scheduler=True, logging_level=settings.log_level)
+    # Start listening (blocking)
+    worker.work(with_scheduler=True, logging_level=settings.log_level)
