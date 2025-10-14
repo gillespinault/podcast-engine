@@ -7,6 +7,8 @@ on:
       - 'app/**'
       - 'requirements.txt'
       - 'Dockerfile'
+      - 'worker_entrypoint.py'
+      - 'entrypoint.sh'
       - '.github/workflows/docker-publish.yml'
   workflow_dispatch:
 
