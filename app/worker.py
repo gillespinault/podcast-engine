@@ -190,8 +190,8 @@ async def _process_podcast_job_async(
         chunks_dir = job_dir / "chunks"
         chunks_dir.mkdir(exist_ok=True)
 
-        # Step 1: Text chunking
-        logger.info(f"[{job_id}] Step 1: Chunking text ({len(podcast_req.text)} chars)")
+        # Step 1: Text chunking (0-10%)
+        logger.info(f"[{job_id}] ⏳ Step 1/6 (0%): Chunking text ({len(podcast_req.text)} chars)")
         chunker = TextChunker(
             max_chunk_size=podcast_req.tts_options.chunk_size,
             preserve_sentence=podcast_req.tts_options.preserve_sentence,
@@ -207,10 +207,11 @@ async def _process_podcast_job_async(
         if not chunks:
             raise PodcastProcessingError("No text chunks generated")
 
-        logger.info(f"[{job_id}] Generated {len(chunks)} chunks")
+        logger.success(f"[{job_id}] ✓ Step 1/6 (10%): Generated {len(chunks)} chunks")
 
-        # Step 2: TTS synthesis (with automatic retry)
-        logger.info(f"[{job_id}] Step 2: TTS synthesis (max_parallel={podcast_req.processing_options.max_parallel_tts})")
+        # Step 2: TTS synthesis (10-80%)
+        logger.info(f"[{job_id}] ⏳ Step 2/6 (10%): TTS synthesis - {len(chunks)} chunks (max_parallel={podcast_req.processing_options.max_parallel_tts})")
+        logger.info(f"[{job_id}]  └─ Estimated time: {len(chunks) * 15}s-{len(chunks) * 30}s (~20s/chunk with Kokoro TTS)")
 
         tts_client = KokoroTTSClient()
         try:
@@ -230,7 +231,7 @@ async def _process_podcast_job_async(
         # Check for failures
         failed_chunks = [r for r in tts_results if not r[2]]
         if failed_chunks:
-            logger.warning(f"[{job_id}] {len(failed_chunks)} chunks failed TTS")
+            logger.warning(f"[{job_id}] ⚠️  {len(failed_chunks)}/{len(chunks)} chunks failed TTS")
 
         # Get successful audio files
         audio_files = [r[1] for r in tts_results if r[2]]
@@ -238,8 +239,10 @@ async def _process_podcast_job_async(
         if not audio_files:
             raise PodcastProcessingError("No audio chunks generated")
 
-        # Step 3: Merge audio
-        logger.info(f"[{job_id}] Step 3: Merging {len(audio_files)} audio files")
+        logger.success(f"[{job_id}] ✓ Step 2/6 (80%): TTS completed - {len(audio_files)}/{len(chunks)} chunks successful")
+
+        # Step 3: Merge audio (80-90%)
+        logger.info(f"[{job_id}] ⏳ Step 3/6 (80%): Merging {len(audio_files)} audio files with ffmpeg")
         audio_processor = AudioProcessor()
 
         output_filename = f"{podcast_req.metadata.title.replace(' ', '-').lower()}-{job_id[:8]}{AUDIO_FORMATS[podcast_req.audio_options.format]['extension']}"
@@ -256,8 +259,10 @@ async def _process_podcast_job_async(
             add_silence_end=podcast_req.audio_options.add_silence_end,
         )
 
-        # Step 4: Embed metadata
-        logger.info(f"[{job_id}] Step 4: Embedding metadata")
+        logger.success(f"[{job_id}] ✓ Step 3/6 (90%): Audio merged - {merged_audio.name} ({merged_audio.stat().st_size / 1024 / 1024:.1f} MB)")
+
+        # Step 4: Embed metadata (90-95%)
+        logger.info(f"[{job_id}] ⏳ Step 4/6 (90%): Embedding metadata (title, author, cover image)")
 
         cover_image_path = None
         if podcast_req.metadata.cover_image_url and podcast_req.audio_options.embed_cover:
@@ -281,13 +286,18 @@ async def _process_podcast_job_async(
             cover_image_path=cover_image_path,
         )
 
-        # Step 5: Get audio duration
-        duration = await audio_processor.get_audio_duration(merged_audio)
+        logger.success(f"[{job_id}] ✓ Step 4/6 (95%): Metadata embedded successfully")
 
-        # Step 6: Cleanup temporary files
-        logger.info(f"[{job_id}] Cleaning up temporary files")
+        # Step 5: Get audio duration (95-98%)
+        logger.info(f"[{job_id}] ⏳ Step 5/6 (95%): Calculating audio duration")
+        duration = await audio_processor.get_audio_duration(merged_audio)
+        logger.success(f"[{job_id}] ✓ Step 5/6 (98%): Duration: {duration:.1f}s ({duration/60:.1f} min)")
+
+        # Step 6: Cleanup and finalization (98-100%)
+        logger.info(f"[{job_id}] ⏳ Step 6/6 (98%): Cleaning up temporary files")
         import shutil
         shutil.rmtree(job_dir, ignore_errors=True)
+        logger.success(f"[{job_id}] ✓ Step 6/6 (99%): Cleanup complete")
 
         # Calculate stats
         processing_time = time.time() - start_time
@@ -304,7 +314,7 @@ async def _process_podcast_job_async(
             estimated_listening_time_minutes=duration / 60,
         )
 
-        logger.success(f"[{job_id}] RQ Job completed in {processing_time:.1f}s")
+        logger.success(f"[{job_id}] 🎉 Job completed in {processing_time:.1f}s - {output_filename} ({merged_audio.stat().st_size / 1024 / 1024:.1f} MB, {duration/60:.1f} min)")
 
         # Build podcast data for callback
         podcast_data = {
@@ -317,6 +327,7 @@ async def _process_podcast_job_async(
 
         # Send webhook callback on success
         if callback_url:
+            logger.info(f"[{job_id}] 📡 Sending webhook callback to n8n workflow...")
             await send_webhook_callback_with_retry(
                 callback_url=str(callback_url),
                 job_id=job_id,
@@ -325,6 +336,7 @@ async def _process_podcast_job_async(
                 processing_stats=stats,
                 callbacks=callbacks
             )
+            logger.success(f"[{job_id}] ✓ Webhook callback sent - Processing complete!")
 
     except Exception as e:
         logger.exception(f"[{job_id}] RQ Job failed")
@@ -343,6 +355,7 @@ async def _process_podcast_job_async(
         # Send webhook callback on failure
         if callback_url:
             try:
+                logger.info(f"[{job_id}] 📡 Sending error webhook callback to n8n workflow...")
                 await send_webhook_callback_with_retry(
                     callback_url=str(callback_url),
                     job_id=job_id,
@@ -350,6 +363,7 @@ async def _process_podcast_job_async(
                     error=f"{type(e).__name__}: {str(e)}",
                     callbacks=callbacks
                 )
+                logger.info(f"[{job_id}] ✓ Error callback sent")
             except Exception as callback_error:
                 logger.error(f"[{job_id}] Failed to send error callback: {callback_error}")
 
