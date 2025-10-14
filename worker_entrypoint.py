@@ -23,10 +23,11 @@ if __name__ == "__main__":
     logger.info(f"Queue: podcast_processing")
 
     # Listen to podcast_processing queue (RQ 2.0 doesn't need Connection context)
+    import os
     worker = Worker(
         queues=['podcast_processing'],
         connection=redis_conn,
-        name=f"podcast-worker-{settings.api_host}",
+        name=f"podcast-worker-{os.getpid()}",  # Unique name per process
     )
     logger.info(f"✓ Worker registered: {worker.name}")
     logger.info("📝 Listening for jobs...")
