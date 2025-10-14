@@ -372,10 +372,12 @@ def enqueue_podcast_job(
 
     job = podcast_queue.enqueue(
         process_podcast_job,
-        job_id=job_id,
-        podcast_req_dict=podcast_req.model_dump(),
-        callback_url=callback_url,
-        callbacks=podcast_req.callbacks.model_dump() if podcast_req.callbacks else None,
+        kwargs={
+            'job_id': job_id,
+            'podcast_req_dict': podcast_req.model_dump(),
+            'callback_url': callback_url,
+            'callbacks': podcast_req.callbacks.model_dump() if podcast_req.callbacks else None,
+        },
         retry=Retry(max=3, interval=[30, 60, 120]),  # 3 retries with exponential backoff
         failure_ttl=86400,  # Keep failed jobs for 24h
         result_ttl=3600,  # Keep successful job results for 1h
