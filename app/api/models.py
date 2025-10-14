@@ -91,7 +91,7 @@ class ProcessingOptions(BaseModel):
     """Processing behavior options"""
     async_mode: bool = Field(default=False, description="Return immediately with job ID (true) or wait for completion (false)")
     callback_url: Optional[HttpUrl] = Field(default=None, description="Webhook URL to POST results when job completes (async mode only)")
-    max_parallel_tts: int = Field(default=5, ge=1, le=20, description="Max parallel TTS API calls")
+    max_parallel_tts: int = Field(default=3, ge=1, le=10, description="Max parallel TTS API calls (reduced to prevent Kokoro overload)")
     retry_on_error: bool = Field(default=True, description="Retry failed TTS chunks")
     max_retries: int = Field(default=3, ge=0, le=10, description="Max retry attempts per chunk")
     cleanup_on_error: bool = Field(default=True, description="Delete temporary files on error")
