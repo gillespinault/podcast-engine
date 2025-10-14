@@ -324,3 +324,87 @@ class WebhookPodcastResponse(PodcastResponse):
                 }
             }
         }
+
+
+# ============================================================================
+# Job Status Models (for progress tracking in GUI)
+# ============================================================================
+
+class JobProgress(BaseModel):
+    """Progress information for a job"""
+    current_step: int = Field(ge=0, le=6, description="Current step (0-6)")
+    total_steps: int = Field(default=6, description="Total steps in process")
+    step_name: str = Field(description="Name of current step (e.g., 'Chunking text', 'TTS synthesis')")
+    progress_percent: int = Field(ge=0, le=100, description="Overall progress percentage")
+    estimated_time_remaining: Optional[float] = Field(default=None, description="Estimated seconds remaining")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "current_step": 2,
+                "total_steps": 6,
+                "step_name": "TTS synthesis",
+                "progress_percent": 40,
+                "estimated_time_remaining": 120.5
+            }
+        }
+
+
+class JobStatusResponse(BaseModel):
+    """Status of a job in the queue"""
+    job_id: str
+    status: Literal["queued", "started", "finished", "failed", "deferred"] = Field(description="RQ job status")
+    title: Optional[str] = Field(default=None, description="Podcast title")
+    created_at: Optional[datetime] = Field(default=None, description="Job creation timestamp")
+    started_at: Optional[datetime] = Field(default=None, description="Job start timestamp")
+    ended_at: Optional[datetime] = Field(default=None, description="Job completion timestamp")
+    progress: Optional[JobProgress] = Field(default=None, description="Progress information (if job is running)")
+    result: Optional[dict] = Field(default=None, description="Job result (if finished)")
+    error: Optional[str] = Field(default=None, description="Error message (if failed)")
+    position_in_queue: Optional[int] = Field(default=None, description="Position in queue (if queued)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "job_id": "abc123-def456",
+                "status": "started",
+                "title": "AI Introduction",
+                "created_at": "2025-10-14T12:00:00Z",
+                "started_at": "2025-10-14T12:00:05Z",
+                "progress": {
+                    "current_step": 2,
+                    "total_steps": 6,
+                    "step_name": "TTS synthesis",
+                    "progress_percent": 40
+                }
+            }
+        }
+
+
+class JobListResponse(BaseModel):
+    """List of jobs"""
+    jobs: List[JobStatusResponse]
+    total: int = Field(description="Total number of jobs")
+    queued: int = Field(description="Number of queued jobs")
+    started: int = Field(description="Number of running jobs")
+    finished: int = Field(description="Number of finished jobs")
+    failed: int = Field(description="Number of failed jobs")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jobs": [
+                    {
+                        "job_id": "abc123",
+                        "status": "started",
+                        "title": "AI Introduction",
+                        "progress": {"current_step": 2, "step_name": "TTS synthesis", "progress_percent": 40}
+                    }
+                ],
+                "total": 5,
+                "queued": 1,
+                "started": 2,
+                "finished": 1,
+                "failed": 1
+            }
+        }

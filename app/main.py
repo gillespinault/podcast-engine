@@ -22,11 +22,16 @@ from app.api.models import (
     ProcessingStats,
     WebhookPodcastRequest,
     WebhookPodcastResponse,
+    JobStatusResponse,
+    JobListResponse,
+    JobProgress,
 )
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
-from app.worker import enqueue_podcast_job  # RQ job queue
+from app.worker import enqueue_podcast_job, redis_conn, podcast_queue  # RQ job queue
+from rq.job import Job
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry, DeferredJobRegistry
 import httpx
 import asyncio
 
@@ -174,6 +179,131 @@ async def get_voices(request: Request, language: str = None):
         return filtered_voices
     else:
         return all_voices
+
+
+# ============================================================================
+# Job Status Endpoints (for GUI progress tracking)
+# ============================================================================
+
+def _rq_job_to_status_response(job: Job) -> JobStatusResponse:
+    """
+    Convert RQ Job object to JobStatusResponse model
+
+    Reads progress metadata from Redis (stored by worker.py)
+    """
+    # Get job metadata (stored by worker in meta field)
+    meta = job.meta or {}
+    title = meta.get("title")
+
+    # Parse progress from meta
+    progress = None
+    if meta.get("progress"):
+        progress = JobProgress(**meta["progress"])
+
+    # Get timestamps
+    created_at = job.created_at
+    started_at = job.started_at
+    ended_at = job.ended_at
+
+    # Get result or error
+    result_data = None
+    error_msg = None
+
+    if job.is_finished and job.result:
+        result_data = job.result
+    elif job.is_failed:
+        error_msg = str(job.exc_info) if job.exc_info else "Unknown error"
+
+    return JobStatusResponse(
+        job_id=job.id,
+        status=job.get_status(),
+        title=title,
+        created_at=created_at,
+        started_at=started_at,
+        ended_at=ended_at,
+        progress=progress,
+        result=result_data,
+        error=error_msg,
+        position_in_queue=None  # Calculated separately for queued jobs
+    )
+
+
+@app.get("/api/v1/jobs", response_model=JobListResponse, tags=["Jobs"])
+async def list_jobs():
+    """
+    List all jobs in the queue (queued, started, finished, failed)
+
+    Returns jobs sorted by creation time (newest first)
+    """
+    # Get registries
+    started_registry = StartedJobRegistry(queue=podcast_queue)
+    finished_registry = FinishedJobRegistry(queue=podcast_queue)
+    failed_registry = FailedJobRegistry(queue=podcast_queue)
+    deferred_registry = DeferredJobRegistry(queue=podcast_queue)
+
+    # Get job IDs from each registry
+    queued_job_ids = podcast_queue.job_ids  # Jobs in queue
+    started_job_ids = started_registry.get_job_ids()
+    finished_job_ids = finished_registry.get_job_ids()
+    failed_job_ids = failed_registry.get_job_ids()
+
+    # Collect all jobs
+    all_job_ids = list(queued_job_ids) + list(started_job_ids) + list(finished_job_ids) + list(failed_job_ids)
+
+    jobs_list = []
+    for job_id in all_job_ids:
+        try:
+            job = Job.fetch(job_id, connection=redis_conn)
+            job_status = _rq_job_to_status_response(job)
+
+            # Add position in queue for queued jobs
+            if job.get_status() == "queued":
+                try:
+                    job_status.position_in_queue = queued_job_ids.index(job_id) + 1
+                except ValueError:
+                    pass
+
+            jobs_list.append(job_status)
+        except Exception as e:
+            logger.warning(f"Failed to fetch job {job_id}: {e}")
+            continue
+
+    # Sort by creation time (newest first)
+    jobs_list.sort(key=lambda x: x.created_at or time.time(), reverse=True)
+
+    # Count by status
+    queued_count = len([j for j in jobs_list if j.status == "queued"])
+    started_count = len([j for j in jobs_list if j.status == "started"])
+    finished_count = len([j for j in jobs_list if j.status == "finished"])
+    failed_count = len([j for j in jobs_list if j.status == "failed"])
+
+    return JobListResponse(
+        jobs=jobs_list,
+        total=len(jobs_list),
+        queued=queued_count,
+        started=started_count,
+        finished=finished_count,
+        failed=failed_count
+    )
+
+
+@app.get("/api/v1/jobs/{job_id}", response_model=JobStatusResponse, tags=["Jobs"])
+async def get_job_status(job_id: str):
+    """
+    Get status of a specific job
+
+    Args:
+        job_id: RQ job ID
+
+    Returns:
+        JobStatusResponse with current progress
+    """
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+        return _rq_job_to_status_response(job)
+    except Exception as e:
+        logger.error(f"Failed to fetch job {job_id}: {e}")
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
 
 @app.post("/api/v1/create-podcast", response_model=PodcastResponse, tags=["Podcast"])

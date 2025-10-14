@@ -10,6 +10,7 @@ from typing import Dict, Any
 from redis import Redis
 from rq import Queue, Retry
 from rq.job import Job
+from rq import get_current_job
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import httpx
@@ -45,6 +46,32 @@ class TTSError(Exception):
 class PodcastProcessingError(Exception):
     """Custom exception for non-retryable errors"""
     pass
+
+
+def update_job_progress(job_id: str, current_step: int, step_name: str, progress_percent: int, estimated_time_remaining: float = None):
+    """
+    Update job progress metadata in Redis for GUI tracking
+
+    Args:
+        job_id: RQ job ID
+        current_step: Current step number (1-6)
+        step_name: Human-readable step name
+        progress_percent: Overall progress percentage (0-100)
+        estimated_time_remaining: Estimated seconds remaining (optional)
+    """
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+        job.meta["progress"] = {
+            "current_step": current_step,
+            "total_steps": 6,
+            "step_name": step_name,
+            "progress_percent": progress_percent,
+            "estimated_time_remaining": estimated_time_remaining
+        }
+        job.save_meta()
+        logger.debug(f"[{job_id}] Progress updated: Step {current_step}/6 ({progress_percent}%) - {step_name}")
+    except Exception as e:
+        logger.warning(f"[{job_id}] Failed to update progress: {e}")
 
 
 @retry(
@@ -183,6 +210,14 @@ async def _process_podcast_job_async(
 
     logger.info(f"[{job_id}] RQ Worker processing: {podcast_req.metadata.title}")
 
+    # Store podcast title in job metadata for GUI display
+    try:
+        job = Job.fetch(job_id, connection=redis_conn)
+        job.meta["title"] = podcast_req.metadata.title
+        job.save_meta()
+    except Exception as e:
+        logger.warning(f"[{job_id}] Failed to store title in job meta: {e}")
+
     try:
         # Create job directory
         job_dir = Path(settings.temp_dir) / job_id
@@ -192,6 +227,8 @@ async def _process_podcast_job_async(
 
         # Step 1: Text chunking (0-10%)
         logger.info(f"[{job_id}] ⏳ Step 1/6 (0%): Chunking text ({len(podcast_req.text)} chars)")
+        update_job_progress(job_id, 1, "Chunking text", 5)
+
         chunker = TextChunker(
             max_chunk_size=podcast_req.tts_options.chunk_size,
             preserve_sentence=podcast_req.tts_options.preserve_sentence,
@@ -208,10 +245,13 @@ async def _process_podcast_job_async(
             raise PodcastProcessingError("No text chunks generated")
 
         logger.success(f"[{job_id}] ✓ Step 1/6 (10%): Generated {len(chunks)} chunks")
+        update_job_progress(job_id, 1, "Text chunked", 10)
 
         # Step 2: TTS synthesis (10-80%)
         logger.info(f"[{job_id}] ⏳ Step 2/6 (10%): TTS synthesis - {len(chunks)} chunks (max_parallel={podcast_req.processing_options.max_parallel_tts})")
         logger.info(f"[{job_id}]  └─ Estimated time: {len(chunks) * 15}s-{len(chunks) * 30}s (~20s/chunk with Kokoro TTS)")
+        estimated_tts_time = len(chunks) * 20  # Rough estimate: 20s per chunk
+        update_job_progress(job_id, 2, "TTS synthesis", 15, estimated_tts_time)
 
         tts_client = KokoroTTSClient()
         try:
@@ -240,9 +280,11 @@ async def _process_podcast_job_async(
             raise PodcastProcessingError("No audio chunks generated")
 
         logger.success(f"[{job_id}] ✓ Step 2/6 (80%): TTS completed - {len(audio_files)}/{len(chunks)} chunks successful")
+        update_job_progress(job_id, 2, "TTS synthesis complete", 80)
 
         # Step 3: Merge audio (80-90%)
         logger.info(f"[{job_id}] ⏳ Step 3/6 (80%): Merging {len(audio_files)} audio files with ffmpeg")
+        update_job_progress(job_id, 3, "Merging audio files", 82)
         audio_processor = AudioProcessor()
 
         output_filename = f"{podcast_req.metadata.title.replace(' ', '-').lower()}-{job_id[:8]}{AUDIO_FORMATS[podcast_req.audio_options.format]['extension']}"
@@ -260,9 +302,11 @@ async def _process_podcast_job_async(
         )
 
         logger.success(f"[{job_id}] ✓ Step 3/6 (90%): Audio merged - {merged_audio.name} ({merged_audio.stat().st_size / 1024 / 1024:.1f} MB)")
+        update_job_progress(job_id, 3, "Audio merge complete", 90)
 
         # Step 4: Embed metadata (90-95%)
         logger.info(f"[{job_id}] ⏳ Step 4/6 (90%): Embedding metadata (title, author, cover image)")
+        update_job_progress(job_id, 4, "Embedding metadata", 91)
 
         cover_image_path = None
         if podcast_req.metadata.cover_image_url and podcast_req.audio_options.embed_cover:
@@ -287,17 +331,22 @@ async def _process_podcast_job_async(
         )
 
         logger.success(f"[{job_id}] ✓ Step 4/6 (95%): Metadata embedded successfully")
+        update_job_progress(job_id, 4, "Metadata embedded", 95)
 
         # Step 5: Get audio duration (95-98%)
         logger.info(f"[{job_id}] ⏳ Step 5/6 (95%): Calculating audio duration")
+        update_job_progress(job_id, 5, "Calculating duration", 96)
         duration = await audio_processor.get_audio_duration(merged_audio)
         logger.success(f"[{job_id}] ✓ Step 5/6 (98%): Duration: {duration:.1f}s ({duration/60:.1f} min)")
+        update_job_progress(job_id, 5, "Duration calculated", 98)
 
         # Step 6: Cleanup and finalization (98-100%)
         logger.info(f"[{job_id}] ⏳ Step 6/6 (98%): Cleaning up temporary files")
+        update_job_progress(job_id, 6, "Cleaning up", 99)
         import shutil
         shutil.rmtree(job_dir, ignore_errors=True)
         logger.success(f"[{job_id}] ✓ Step 6/6 (99%): Cleanup complete")
+        update_job_progress(job_id, 6, "Complete", 100)
 
         # Calculate stats
         processing_time = time.time() - start_time
