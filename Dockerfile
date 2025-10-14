@@ -36,16 +36,21 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy application code
 COPY app/ /app/app/
 
+# Copy entrypoint scripts
+COPY entrypoint.sh /app/
+COPY worker_entrypoint.py /app/
+
 # Create directories for temporary files and outputs
 RUN mkdir -p /data/shared/podcasts/{jobs,final,chunks} && \
-    chmod -R 777 /data/shared/podcasts
+    chmod -R 777 /data/shared/podcasts && \
+    chmod +x /app/entrypoint.sh
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Health check (disabled temporarily - workers may interfere)
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+#     CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose port
 EXPOSE 8000
 
-# Run FastAPI with uvicorn
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+# Run API + Workers via entrypoint
+CMD ["/app/entrypoint.sh"]
