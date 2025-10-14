@@ -265,7 +265,14 @@ async def list_jobs():
 
             jobs_list.append(job_status)
         except Exception as e:
-            logger.warning(f"Failed to fetch job {job_id}: {e}")
+            # Jobs not found are normal (expired/cleaned from Redis but still in registry)
+            # Log as DEBUG instead of WARNING to reduce noise
+            error_msg = str(e)
+            if "No such job" in error_msg:
+                logger.debug(f"Skipping expired job {job_id}: {error_msg}")
+            else:
+                # Other errors (validation, etc.) are actual warnings
+                logger.warning(f"Failed to fetch job {job_id}: {e}")
             continue
 
     # Sort by creation time (newest first)
