@@ -216,7 +216,7 @@ def _rq_job_to_status_response(job: Job) -> JobStatusResponse:
 
     return JobStatusResponse(
         job_id=job.id,
-        status=job.get_status(),
+        status=job.get_status().value,  # Convert JobStatus enum to string
         title=title,
         created_at=created_at,
         started_at=started_at,
@@ -257,7 +257,7 @@ async def list_jobs():
             job_status = _rq_job_to_status_response(job)
 
             # Add position in queue for queued jobs
-            if job.get_status() == "queued":
+            if job.get_status().value == "queued":
                 try:
                     job_status.position_in_queue = queued_job_ids.index(job_id) + 1
                 except ValueError:
