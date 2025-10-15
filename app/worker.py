@@ -363,12 +363,17 @@ async def _process_podcast_job_async(
         # Phase 4: Podcast Series Support (Episode grouping)
         # If podcast_series is set, use it as album and auto-generate episode number
         album_value = podcast_req.metadata.publisher  # Default behavior (backward compatible)
+        author_value = podcast_req.metadata.author    # Default behavior (backward compatible)
         track_number = None
 
         if podcast_req.metadata.podcast_series:
             # Use podcast_series as album name
             album_value = podcast_req.metadata.podcast_series
             logger.info(f"[{job_id}] Using podcast series: '{album_value}'")
+
+            # Use consistent author for all episodes in series
+            author_value = "Podcast Engine"
+            logger.info(f"[{job_id}] Using series author: '{author_value}'")
 
             # Auto-generate episode number if not provided
             if podcast_req.metadata.episode_number is None:
@@ -381,9 +386,9 @@ async def _process_podcast_job_async(
         audio_processor.embed_metadata(
             audio_path=merged_audio,
             title=podcast_req.metadata.title,
-            author=podcast_req.metadata.author,
+            author=author_value,              # Dynamic: "Podcast Engine" for series, or original author
             description=podcast_req.metadata.description,
-            album=album_value,  # Dynamic: podcast_series or publisher
+            album=album_value,                # Dynamic: podcast_series or publisher
             genre=podcast_req.metadata.genre,
             narrator=podcast_req.metadata.narrator,
             publisher=podcast_req.metadata.publisher,
