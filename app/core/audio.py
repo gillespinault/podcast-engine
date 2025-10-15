@@ -156,6 +156,7 @@ class AudioProcessor:
         copyright: Optional[str] = None,
         publication_date: Optional[datetime] = None,
         cover_image_path: Optional[Path] = None,
+        track_number: Optional[int] = None,
     ) -> None:
         """
         Embed metadata into audio file
@@ -172,6 +173,7 @@ class AudioProcessor:
             copyright: Copyright notice
             publication_date: Publication date
             cover_image_path: Path to cover image (JPEG/PNG)
+            track_number: Track/episode number (for podcast series)
         """
         try:
             logger.info(f"Embedding metadata into {audio_path.name}")
@@ -198,6 +200,11 @@ class AudioProcessor:
                 audio["cprt"] = copyright  # Copyright
             if publication_date:
                 audio["\xa9day"] = publication_date.strftime("%Y-%m-%d")  # Date
+            if track_number is not None:
+                # Track number (for podcast episodes): format is [(track, total_tracks)]
+                # We only set track number, total_tracks is 0 (unknown)
+                audio["trkn"] = [(track_number, 0)]
+                logger.info(f"Set track number: {track_number}")
 
             # Set as audiobook
             audio["stik"] = [2]  # Media type: Audiobook (2)

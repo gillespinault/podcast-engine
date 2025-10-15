@@ -23,6 +23,18 @@ class PodcastMetadata(BaseModel):
     copyright: Optional[str] = Field(default=None, max_length=500, description="Copyright notice")
     genre: Optional[str] = Field(default="Audiobook", max_length=100, description="Genre")
 
+    # Podcast Series Support (Phase 4: Episode grouping)
+    podcast_series: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Podcast series name (e.g., 'Wallabag Articles'). All episodes with same series name will be grouped together."
+    )
+    episode_number: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Episode number (auto-generated from Redis counter if None and podcast_series is set)"
+    )
+
     class Config:
         json_schema_extra = {
             "example": {

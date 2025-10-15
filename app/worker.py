@@ -48,6 +48,43 @@ class PodcastProcessingError(Exception):
     pass
 
 
+def get_next_episode_number(series_name: str) -> int:
+    """
+    Get next episode number for a podcast series using Redis atomic counter
+
+    Args:
+        series_name: Name of podcast series (e.g., "Wallabag Articles")
+
+    Returns:
+        Next episode number (1, 2, 3, ...)
+
+    Example:
+        >>> get_next_episode_number("Wallabag Articles")
+        1
+        >>> get_next_episode_number("Wallabag Articles")
+        2
+    """
+    try:
+        # Redis key: podcast:series:{series_name}:counter
+        # Use slugified series name for key safety
+        series_slug = series_name.lower().replace(" ", "_").replace("/", "_")
+        redis_key = f"podcast:series:{series_slug}:counter"
+
+        # INCR is atomic - safe for concurrent jobs
+        episode_number = redis_conn.incr(redis_key)
+
+        logger.info(f"[Series: {series_name}] Generated episode number: {episode_number}")
+        return episode_number
+
+    except Exception as e:
+        logger.error(f"Failed to get episode number for series '{series_name}': {e}")
+        # Fallback to timestamp-based numbering if Redis fails
+        import time
+        fallback_number = int(time.time() % 100000)
+        logger.warning(f"Using fallback episode number: {fallback_number}")
+        return fallback_number
+
+
 def update_job_progress(job_id: str, current_step: int, step_name: str, progress_percent: int, estimated_time_remaining: float = None):
     """
     Update job progress metadata in Redis for GUI tracking
@@ -323,18 +360,37 @@ async def _process_podcast_job_async(
                 cover_image_path
             )
 
+        # Phase 4: Podcast Series Support (Episode grouping)
+        # If podcast_series is set, use it as album and auto-generate episode number
+        album_value = podcast_req.metadata.publisher  # Default behavior (backward compatible)
+        track_number = None
+
+        if podcast_req.metadata.podcast_series:
+            # Use podcast_series as album name
+            album_value = podcast_req.metadata.podcast_series
+            logger.info(f"[{job_id}] Using podcast series: '{album_value}'")
+
+            # Auto-generate episode number if not provided
+            if podcast_req.metadata.episode_number is None:
+                track_number = get_next_episode_number(podcast_req.metadata.podcast_series)
+                logger.info(f"[{job_id}] Auto-generated episode number: {track_number}")
+            else:
+                track_number = podcast_req.metadata.episode_number
+                logger.info(f"[{job_id}] Using provided episode number: {track_number}")
+
         audio_processor.embed_metadata(
             audio_path=merged_audio,
             title=podcast_req.metadata.title,
             author=podcast_req.metadata.author,
             description=podcast_req.metadata.description,
-            album=podcast_req.metadata.publisher,
+            album=album_value,  # Dynamic: podcast_series or publisher
             genre=podcast_req.metadata.genre,
             narrator=podcast_req.metadata.narrator,
             publisher=podcast_req.metadata.publisher,
             copyright=podcast_req.metadata.copyright,
             publication_date=podcast_req.metadata.publication_date,
             cover_image_path=cover_image_path,
+            track_number=track_number,  # New: Episode number support
         )
 
         logger.success(f"[{job_id}] ✓ Step 4/6 (95%): Metadata embedded successfully")
