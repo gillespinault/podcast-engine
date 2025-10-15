@@ -411,6 +411,30 @@ async def _process_podcast_job_async(
         logger.success(f"[{job_id}] ✓ Step 6/6 (99%): Cleanup complete")
         update_job_progress(job_id, 6, "Complete", 100)
 
+        # Phase 4.5: Copy to Audiobookshelf if podcast_series is defined
+        if podcast_req.metadata.podcast_series:
+            try:
+                # Slugify series name for folder safety (spaces, special chars)
+                series_slug = podcast_req.metadata.podcast_series.replace(" ", "_").replace("/", "_").replace("\\", "_")
+
+                # Audiobookshelf podcasts directory (mounted volume)
+                abs_podcasts = Path("/podcasts")
+                series_folder = abs_podcasts / series_slug
+
+                # Create series folder if doesn't exist
+                series_folder.mkdir(parents=True, exist_ok=True)
+
+                # Copy M4B to Audiobookshelf (preserve timestamps)
+                dest_path = series_folder / merged_audio.name
+                shutil.copy2(merged_audio, dest_path)
+
+                logger.success(f"[{job_id}] 📚 Copied to Audiobookshelf: /podcasts/{series_slug}/{merged_audio.name}")
+                logger.info(f"[{job_id}]  └─ All episodes in this folder will be grouped as one podcast")
+            except Exception as e:
+                # Non-fatal: log warning but don't fail the job
+                logger.warning(f"[{job_id}] Failed to copy to Audiobookshelf: {e}")
+                logger.info(f"[{job_id}] File still available at: {merged_audio}")
+
         # Calculate stats
         processing_time = time.time() - start_time
         stats = ProcessingStats(
