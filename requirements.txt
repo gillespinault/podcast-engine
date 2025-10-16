@@ -16,7 +16,7 @@ pypdf==5.1.0             # PDF library (cover image extraction)
 Pillow==11.0.0           # Image processing (cover extraction)
 
 # LLM integration (Gemini API for chaptering + language detection)
-google-generativeai==0.8.3  # Google Gemini API
+google-generativeai==0.8.5  # Google Gemini API (legacy SDK, upgrade to fix ragStoreName error)
 langdetect==1.0.9           # Fallback language detection
 json-repair==0.34.0         # Fix malformed JSON from LLM responses
 
