@@ -25,28 +25,102 @@
             <h1 class="text-5xl font-bold mb-4 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
                 🎙️ {{ app_name }}
             </h1>
-            <p class="text-gray-400 text-lg">Transform text into professional podcasts with AI-powered voices</p>
+            <p class="text-gray-400 text-lg">Transform text or PDFs into professional audiobooks with AI</p>
             <p class="text-gray-500 text-sm mt-2">v{{ app_version }}</p>
         </header>
 
         <!-- Main Form -->
         <div x-data="podcastForm()" class="space-y-8">
 
-            <!-- Text Input -->
+            <!-- Input Mode Selection -->
             <section class="bg-gray-800 rounded-lg p-6 shadow-xl">
                 <h2 class="text-2xl font-semibold mb-4 flex items-center">
                     <span class="bg-blue-500 text-white rounded-full w-8 h-8 flex items-center justify-center mr-3 text-sm">1</span>
-                    Your Text
+                    Input Source
                 </h2>
-                <textarea
-                    x-model="form.text"
-                    rows="12"
-                    placeholder="Paste your article, blog post, or any text here... (minimum 100 characters)"
-                    class="w-full bg-gray-700 text-gray-100 rounded-lg p-4 border border-gray-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none transition"
-                ></textarea>
-                <div class="mt-2 text-sm text-gray-400 flex justify-between">
-                    <span x-text="`${form.text.length} characters`"></span>
-                    <span x-text="`~${Math.ceil(form.text.split(' ').length / 150)} min read`"></span>
+
+                <!-- Mode Toggle -->
+                <div class="flex gap-4 mb-6">
+                    <button
+                        @click="inputMode = 'text'"
+                        :class="inputMode === 'text' ? 'bg-blue-600 border-blue-500' : 'bg-gray-700 border-gray-600'"
+                        class="flex-1 py-3 px-6 rounded-lg border-2 transition hover:border-blue-500"
+                    >
+                        <span class="text-lg">📝 Text Input</span>
+                        <p class="text-xs text-gray-400 mt-1">Paste article or blog post</p>
+                    </button>
+                    <button
+                        @click="inputMode = 'pdf'"
+                        :class="inputMode === 'pdf' ? 'bg-purple-600 border-purple-500' : 'bg-gray-700 border-gray-600'"
+                        class="flex-1 py-3 px-6 rounded-lg border-2 transition hover:border-purple-500"
+                    >
+                        <span class="text-lg">📄 PDF Upload</span>
+                        <p class="text-xs text-gray-400 mt-1">Upload book or magazine</p>
+                    </button>
+                </div>
+
+                <!-- Text Input Mode -->
+                <div x-show="inputMode === 'text'" x-transition>
+                    <textarea
+                        x-model="form.text"
+                        rows="12"
+                        placeholder="Paste your article, blog post, or any text here... (minimum 100 characters)"
+                        class="w-full bg-gray-700 text-gray-100 rounded-lg p-4 border border-gray-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none transition"
+                    ></textarea>
+                    <div class="mt-2 text-sm text-gray-400 flex justify-between">
+                        <span x-text="`${form.text.length} characters`"></span>
+                        <span x-text="`~${Math.ceil(form.text.split(' ').length / 150)} min read`"></span>
+                    </div>
+                </div>
+
+                <!-- PDF Upload Mode -->
+                <div x-show="inputMode === 'pdf'" x-transition>
+                    <div class="border-2 border-dashed border-gray-600 rounded-lg p-8 text-center hover:border-purple-500 transition">
+                        <input
+                            type="file"
+                            id="pdfFile"
+                            accept=".pdf"
+                            @change="handleFileSelect($event)"
+                            class="hidden"
+                        >
+                        <label for="pdfFile" class="cursor-pointer">
+                            <div class="text-6xl mb-4">📄</div>
+                            <p class="text-lg mb-2">Click to upload or drag and drop</p>
+                            <p class="text-sm text-gray-400">PDF files up to 50MB</p>
+                        </label>
+                    </div>
+
+                    <!-- Selected File Info -->
+                    <div x-show="selectedFile" x-transition class="mt-4 bg-gray-700 rounded-lg p-4 flex items-center justify-between">
+                        <div class="flex items-center space-x-3">
+                            <span class="text-3xl">📄</span>
+                            <div>
+                                <p class="font-semibold" x-text="selectedFile?.name"></p>
+                                <p class="text-sm text-gray-400" x-text="formatBytes(selectedFile?.size)"></p>
+                            </div>
+                        </div>
+                        <button
+                            @click="clearFile()"
+                            class="text-red-400 hover:text-red-300 transition"
+                            title="Remove file"
+                        >
+                            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- PDF Processing Info -->
+                    <div class="mt-4 bg-purple-900 bg-opacity-20 border border-purple-500 rounded-lg p-4">
+                        <p class="text-sm text-purple-200">
+                            <strong>🤖 AI-Powered Processing:</strong><br>
+                            • Automatic language detection<br>
+                            • Chapter detection (books, magazines, articles)<br>
+                            • Image descriptions generation<br>
+                            • URL and citation cleanup<br>
+                            • OCR support for scanned PDFs
+                        </p>
+                    </div>
                 </div>
             </section>
 
@@ -210,20 +284,27 @@
             <div class="text-center">
                 <button
                     @click="submitForm()"
-                    :disabled="isProcessing || form.text.length < 100"
+                    :disabled="isProcessing || !canSubmit()"
                     class="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-12 py-4 rounded-lg font-semibold text-lg shadow-lg hover:shadow-xl transform hover:scale-105 transition disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
                 >
-                    <span x-show="!isProcessing">🎙️ Create Podcast</span>
+                    <span x-show="!isProcessing">
+                        <span x-show="inputMode === 'text'">🎙️ Create Podcast</span>
+                        <span x-show="inputMode === 'pdf'">📚 Create Audiobook</span>
+                    </span>
                     <span x-show="isProcessing" x-cloak>
                         <svg class="animate-spin inline-block w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        Processing...
+                        <span x-show="inputMode === 'text'">Processing...</span>
+                        <span x-show="inputMode === 'pdf'">Analyzing PDF with AI...</span>
                     </span>
                 </button>
-                <p class="text-sm text-gray-400 mt-3" x-show="form.text.length < 100" x-cloak>
+                <p class="text-sm text-gray-400 mt-3" x-show="inputMode === 'text' && form.text.length < 100" x-cloak>
                     Minimum 100 characters required
+                </p>
+                <p class="text-sm text-gray-400 mt-3" x-show="inputMode === 'pdf' && !selectedFile" x-cloak>
+                    Please select a PDF file
                 </p>
             </div>
 
@@ -311,6 +392,8 @@
     <script>
         function podcastForm() {
             return {
+                inputMode: 'text',  // 'text' or 'pdf'
+                selectedFile: null,
                 form: {
                     text: '',
                     metadata: {
@@ -403,19 +486,71 @@
                     }
                 },
 
+                handleFileSelect(event) {
+                    const file = event.target.files[0];
+                    if (file && file.type === 'application/pdf') {
+                        this.selectedFile = file;
+                        // Auto-fill title from filename if empty
+                        if (!this.form.metadata.title) {
+                            this.form.metadata.title = file.name.replace('.pdf', '');
+                        }
+                    } else {
+                        alert('Please select a valid PDF file');
+                        event.target.value = '';
+                    }
+                },
+
+                clearFile() {
+                    this.selectedFile = null;
+                    document.getElementById('pdfFile').value = '';
+                },
+
+                canSubmit() {
+                    if (this.inputMode === 'text') {
+                        return this.form.text.length >= 100;
+                    } else if (this.inputMode === 'pdf') {
+                        return this.selectedFile !== null;
+                    }
+                    return false;
+                },
+
                 async submitForm() {
                     this.isProcessing = true;
                     this.result = null;
                     this.error = null;
 
                     try {
-                        const response = await fetch('/api/v1/create-podcast', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(this.form)
-                        });
+                        let response;
+
+                        if (this.inputMode === 'text') {
+                            // Text mode: JSON payload
+                            response = await fetch('/api/v1/create-podcast', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                },
+                                body: JSON.stringify(this.form)
+                            });
+                        } else {
+                            // PDF mode: FormData (multipart/form-data)
+                            const formData = new FormData();
+                            formData.append('pdf_file', this.selectedFile);
+
+                            // Append metadata as JSON string
+                            formData.append('metadata_json', JSON.stringify(this.form.metadata));
+                            formData.append('tts_options_json', JSON.stringify(this.form.tts_options));
+                            formData.append('audio_options_json', JSON.stringify(this.form.audio_options));
+
+                            // Enable async mode for PDF (can take longer)
+                            const processingOptions = { ...this.form.processing_options, async_mode: true };
+                            formData.append('processing_options_json', JSON.stringify(processingOptions));
+
+                            response = await fetch('/api/v1/create-podcast', {
+                                method: 'POST',
+                                // No Content-Type header - browser sets it with boundary automatically
+                                body: formData
+                            });
+                        }
 
                         if (!response.ok) {
                             const errorData = await response.json();
@@ -423,12 +558,21 @@
                         }
 
                         const data = await response.json();
-                        this.result = data;
 
-                        // Scroll to result
-                        setTimeout(() => {
-                            document.querySelector('[x-show="result"]').scrollIntoView({ behavior: 'smooth' });
-                        }, 100);
+                        if (this.inputMode === 'pdf' && data.job_id) {
+                            // PDF mode with async processing - show job in queue
+                            this.result = null;
+                            // Job will appear in "Active Jobs" section via polling
+                            await this.fetchJobs();
+                        } else {
+                            // Sync mode or immediate result
+                            this.result = data;
+
+                            // Scroll to result
+                            setTimeout(() => {
+                                document.querySelector('[x-show="result"]')?.scrollIntoView({ behavior: 'smooth' });
+                            }, 100);
+                        }
 
                     } catch (err) {
                         this.error = err.message;
