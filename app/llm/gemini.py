@@ -156,12 +156,15 @@ You are an expert at analyzing documents and preparing them for audiobook narrat
    - "article" (single long text)
    - Field: "document_type"
 
-3. **Detect chapters/sections**:
-   - Identify natural break points based on headings and structure
-   - Use Markdown headings (# Chapter, ## Section) as primary indicators
-   - Books: 5-15 chapters typical
-   - Magazines: 1 chapter per article
-   - Articles: Split by H2 headings or create 10-minute logical chunks
+3. **Detect chapters/sections** (CRITICAL - respect document structure):
+   - Identify natural break points based on TOP-LEVEL headings only (# Level 1)
+   - Use Markdown headings as primary indicators
+   - **Books**: Use chapter headings (usually 5-15 chapters)
+   - **Magazines**: ALWAYS create 1 chapter per article (NEVER subdivide articles, even if long)
+   - **Articles**: Create 1 single chapter (do NOT split unless multiple distinct topics)
+
+   IMPORTANT: For magazines and articles, PRESERVE the original document structure.
+   Do NOT artificially split content into smaller chunks for length optimization.
 
 4. **Reformat each chapter for audio narration**:
    - **Remove URLs**: Replace "https://example.com" with "voir lien en description" (French) or "see link in description" (English)
@@ -184,9 +187,13 @@ You are an expert at analyzing documents and preparing them for audiobook narrat
    - Portuguese → "pf_maria" (female) or "pm_joao" (male)
    - Default → "af_bella" (English female)
 
-**Target Chapter Length**:
-- 5-20 minutes audio (750-3000 words per chapter)
-- If no clear structure: create logical 10-minute chunks
+**Target Chapter Length** (informational only, NOT a strict constraint):
+- Books: Aim for 10-30 minutes per chapter when possible
+- Magazines: Chapter length varies by article (do NOT force length limits)
+- Articles: Single chapter of any length
+
+NOTE: Chapter length is secondary to respecting document structure.
+NEVER artificially split articles or chapters to meet length targets.
 
 **Output Format** (MUST BE VALID JSON):
 {{
