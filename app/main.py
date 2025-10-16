@@ -469,6 +469,74 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
 
 
+@app.delete("/api/v1/jobs/{job_id}", tags=["Jobs"])
+async def cancel_job(job_id: str):
+    """
+    Cancel a running or queued job and cleanup temporary files
+
+    Args:
+        job_id: RQ job ID to cancel
+
+    Returns:
+        Success message with cleanup details
+
+    Raises:
+        HTTPException 404: Job not found
+        HTTPException 400: Job cannot be cancelled (already finished/failed)
+    """
+    try:
+        # Fetch job from Redis
+        job = Job.fetch(job_id, connection=redis_conn)
+        job_status = job.get_status().value
+
+        logger.info(f"[{job_id}] Cancel request received (current status: {job_status})")
+
+        # Check if job can be cancelled
+        if job_status not in ["queued", "started"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Job {job_id} cannot be cancelled (status: {job_status}). Only queued or started jobs can be cancelled."
+            )
+
+        # Cancel the job in Redis
+        job.cancel()
+        logger.info(f"[{job_id}] Job marked as cancelled in Redis")
+
+        # Cleanup temporary files
+        cleanup_results = {"temp_dir_deleted": False, "cover_deleted": False}
+
+        # Delete job temp directory
+        job_dir = Path(settings.temp_dir) / job_id
+        if job_dir.exists():
+            import shutil
+            shutil.rmtree(job_dir, ignore_errors=True)
+            cleanup_results["temp_dir_deleted"] = True
+            logger.info(f"[{job_id}] Cleaned up temp directory: {job_dir}")
+
+        # Delete cover image if exists
+        cover_storage_dir = Path(settings.storage_base_path) / "covers"
+        cover_path = cover_storage_dir / f"{job_id}_cover.jpg"
+        if cover_path.exists():
+            cover_path.unlink(missing_ok=True)
+            cleanup_results["cover_deleted"] = True
+            logger.info(f"[{job_id}] Cleaned up cover image: {cover_path}")
+
+        logger.success(f"[{job_id}] Job cancelled successfully")
+
+        return {
+            "success": True,
+            "job_id": job_id,
+            "message": f"Job {job_id} cancelled successfully",
+            "cleanup": cleanup_results
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to cancel job {job_id}: {e}")
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found: {str(e)}")
+
+
 @app.post("/api/v1/create-podcast", response_model=PodcastResponse, tags=["Podcast"])
 async def create_podcast(
     request: Request,

@@ -85,7 +85,7 @@ def get_next_episode_number(series_name: str) -> int:
         return fallback_number
 
 
-def update_job_progress(job_id: str, current_step: int, step_name: str, progress_percent: int, estimated_time_remaining: float = None):
+def update_job_progress(job_id: str, current_step: int, step_name: str, progress_percent: int, estimated_time_remaining: float = None, chapters_progress: list = None):
     """
     Update job progress metadata in Redis for GUI tracking
 
@@ -95,6 +95,7 @@ def update_job_progress(job_id: str, current_step: int, step_name: str, progress
         step_name: Human-readable step name
         progress_percent: Overall progress percentage (0-100)
         estimated_time_remaining: Estimated seconds remaining (optional)
+        chapters_progress: List of chapter progress dicts (multi-file mode only)
     """
     try:
         # CRITICAL FIX: Use get_current_job() to retrieve job from RQ context
@@ -105,17 +106,66 @@ def update_job_progress(job_id: str, current_step: int, step_name: str, progress
             logger.warning(f"[{job_id}] No current job in context, using Job.fetch() as fallback")
             job = Job.fetch(job_id, connection=redis_conn)
 
-        job.meta["progress"] = {
+        progress_data = {
             "current_step": current_step,
             "total_steps": 6,
             "step_name": step_name,
             "progress_percent": progress_percent,
             "estimated_time_remaining": estimated_time_remaining
         }
+
+        # Add chapter-level progress if provided
+        if chapters_progress is not None:
+            progress_data["chapters_progress"] = chapters_progress
+
+        job.meta["progress"] = progress_data
         job.save_meta()
         logger.debug(f"[{job.id}] Progress updated: Step {current_step}/6 ({progress_percent}%) - {step_name}")
     except Exception as e:
         logger.error(f"[{job_id}] Failed to update progress: {e}", exc_info=True)
+
+
+def update_chapter_progress(job_id: str, chapter_number: int, status: str, duration_seconds: float = None, duration_est_seconds: float = None, error: str = None):
+    """
+    Update progress for a specific chapter in job metadata
+
+    Args:
+        job_id: RQ job ID
+        chapter_number: Chapter number (1-indexed)
+        status: Chapter status ("pending", "processing", "completed", "failed")
+        duration_seconds: Actual duration for completed chapters
+        duration_est_seconds: Estimated duration for pending/processing chapters
+        error: Error message for failed chapters
+    """
+    try:
+        job = get_current_job(connection=redis_conn)
+        if not job:
+            job = Job.fetch(job_id, connection=redis_conn)
+
+        # Get existing progress
+        progress = job.meta.get("progress", {})
+        chapters_progress = progress.get("chapters_progress", [])
+
+        # Find and update chapter
+        for chapter in chapters_progress:
+            if chapter["number"] == chapter_number:
+                chapter["status"] = status
+                if duration_seconds is not None:
+                    chapter["duration_seconds"] = duration_seconds
+                if duration_est_seconds is not None:
+                    chapter["duration_est_seconds"] = duration_est_seconds
+                if error is not None:
+                    chapter["error"] = error
+                break
+
+        # Update progress in job.meta
+        progress["chapters_progress"] = chapters_progress
+        job.meta["progress"] = progress
+        job.save_meta()
+
+        logger.debug(f"[{job_id}] Chapter {chapter_number} updated: {status}")
+    except Exception as e:
+        logger.error(f"[{job_id}] Failed to update chapter {chapter_number} progress: {e}", exc_info=True)
 
 
 @retry(
@@ -432,6 +482,29 @@ async def _process_multi_file_audiobook(
                 )
                 logger.info(f"[{job_id}] 📷 Cover image downloaded from URL")
 
+        # Initialize chapters progress (all pending)
+        total_chapters = len(podcast_req.chapters)
+        chapters_progress = []
+        for idx, chapter in enumerate(podcast_req.chapters):
+            chapter_title = chapter.title if hasattr(chapter, 'title') else f"Chapter {idx+1}"
+            chapters_progress.append({
+                "number": idx + 1,
+                "title": chapter_title,
+                "status": "pending",
+                "duration_est_seconds": 180  # Rough estimate: 3 minutes per chapter
+            })
+
+        # Initialize progress with chapter list
+        update_job_progress(
+            job_id,
+            current_step=1,
+            step_name="Preparing chapters",
+            progress_percent=5,
+            chapters_progress=chapters_progress
+        )
+
+        logger.info(f"[{job_id}] Initialized {total_chapters} chapters in progress tracker")
+
         # Initialize shared TTS client and audio processor
         tts_client = KokoroTTSClient()
         audio_processor = AudioProcessor()
@@ -439,10 +512,25 @@ async def _process_multi_file_audiobook(
         try:
             # Process each chapter sequentially
             chapter_results = []
-            total_chapters = len(podcast_req.chapters)
 
             for idx, chapter in enumerate(podcast_req.chapters):
-                # Update progress
+                # Check if job was cancelled
+                try:
+                    job = Job.fetch(job_id, connection=redis_conn)
+                    if job.is_canceled:
+                        logger.warning(f"[{job_id}] Job was cancelled - stopping chapter processing")
+                        raise PodcastProcessingError(f"Job {job_id} was cancelled by user")
+                except Exception as e:
+                    if "cancelled" in str(e).lower():
+                        raise
+                    # If we can't check cancellation status, continue (don't break existing behavior)
+                    logger.debug(f"[{job_id}] Could not check cancellation status: {e}")
+
+                # Mark chapter as processing
+                chapter_num = idx + 1
+                update_chapter_progress(job_id, chapter_num, "processing")
+
+                # Update overall progress
                 progress_percent = int(10 + (idx / total_chapters) * 80)  # 10-90%
                 update_job_progress(
                     job_id,
@@ -452,17 +540,39 @@ async def _process_multi_file_audiobook(
                 )
 
                 # Process chapter
-                chapter_result = await _process_chapter_to_audio(
-                    job_id=job_id,
-                    chapter_index=idx,
-                    chapter_info=chapter.model_dump() if hasattr(chapter, 'model_dump') else chapter,
-                    output_dir=audiobook_dir,
-                    podcast_req=podcast_req,
-                    tts_client=tts_client,
-                    audio_processor=audio_processor,
-                    cover_image_path=cover_image_path
-                )
-                chapter_results.append(chapter_result)
+                try:
+                    chapter_result = await _process_chapter_to_audio(
+                        job_id=job_id,
+                        chapter_index=idx,
+                        chapter_info=chapter.model_dump() if hasattr(chapter, 'model_dump') else chapter,
+                        output_dir=audiobook_dir,
+                        podcast_req=podcast_req,
+                        tts_client=tts_client,
+                        audio_processor=audio_processor,
+                        cover_image_path=cover_image_path
+                    )
+
+                    # Mark chapter as completed
+                    update_chapter_progress(
+                        job_id,
+                        chapter_num,
+                        "completed",
+                        duration_seconds=chapter_result['duration_seconds']
+                    )
+
+                    chapter_results.append(chapter_result)
+
+                except Exception as chapter_error:
+                    # Mark chapter as failed
+                    logger.error(f"[{job_id}] Chapter {chapter_num} failed: {chapter_error}")
+                    update_chapter_progress(
+                        job_id,
+                        chapter_num,
+                        "failed",
+                        error=str(chapter_error)
+                    )
+                    # Re-raise to fail the entire job (or you could continue to next chapter)
+                    raise
 
         finally:
             # Always close TTS client
@@ -667,6 +777,17 @@ async def _process_podcast_job_async(
 
         logger.success(f"[{job_id}] ✓ Step 1/6 (10%): Generated {len(chunks)} chunks")
         update_job_progress(job_id, 1, "Text chunked", 10)
+
+        # Check if job was cancelled before starting TTS
+        try:
+            job = Job.fetch(job_id, connection=redis_conn)
+            if job.is_canceled:
+                logger.warning(f"[{job_id}] Job was cancelled - stopping before TTS synthesis")
+                raise PodcastProcessingError(f"Job {job_id} was cancelled by user")
+        except Exception as e:
+            if "cancelled" in str(e).lower():
+                raise
+            logger.debug(f"[{job_id}] Could not check cancellation status: {e}")
 
         # Step 2: TTS synthesis (10-80%)
         logger.info(f"[{job_id}] ⏳ Step 2/6 (10%): TTS synthesis - {len(chunks)} chunks (max_parallel={podcast_req.processing_options.max_parallel_tts})")

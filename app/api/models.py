@@ -376,6 +376,26 @@ class WebhookPodcastResponse(PodcastResponse):
 # Job Status Models (for progress tracking in GUI)
 # ============================================================================
 
+class ChapterProgress(BaseModel):
+    """Progress information for a single chapter (multi-file mode)"""
+    number: int = Field(ge=1, description="Chapter number (1-indexed)")
+    title: str = Field(description="Chapter title")
+    status: Literal["pending", "processing", "completed", "failed"] = Field(description="Chapter processing status")
+    duration_seconds: Optional[float] = Field(default=None, ge=0, description="Chapter audio duration (completed chapters only)")
+    duration_est_seconds: Optional[float] = Field(default=None, ge=0, description="Estimated duration (pending/processing chapters)")
+    error: Optional[str] = Field(default=None, description="Error message (failed chapters only)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "number": 1,
+                "title": "Introduction",
+                "status": "completed",
+                "duration_seconds": 120.5
+            }
+        }
+
+
 class JobProgress(BaseModel):
     """Progress information for a job"""
     current_step: int = Field(ge=0, le=6, description="Current step (0-6)")
@@ -383,6 +403,10 @@ class JobProgress(BaseModel):
     step_name: str = Field(description="Name of current step (e.g., 'Chunking text', 'TTS synthesis')")
     progress_percent: int = Field(ge=0, le=100, description="Overall progress percentage")
     estimated_time_remaining: Optional[float] = Field(default=None, description="Estimated seconds remaining")
+    chapters_progress: Optional[List[ChapterProgress]] = Field(
+        default=None,
+        description="Granular chapter-level progress (multi-file audiobook mode only)"
+    )
 
     class Config:
         json_schema_extra = {
@@ -391,7 +415,12 @@ class JobProgress(BaseModel):
                 "total_steps": 6,
                 "step_name": "TTS synthesis",
                 "progress_percent": 40,
-                "estimated_time_remaining": 120.5
+                "estimated_time_remaining": 120.5,
+                "chapters_progress": [
+                    {"number": 1, "title": "Intro", "status": "completed", "duration_seconds": 120},
+                    {"number": 2, "title": "Chapter 2", "status": "processing", "duration_est_seconds": 180},
+                    {"number": 3, "title": "Chapter 3", "status": "pending", "duration_est_seconds": 150}
+                ]
             }
         }
 
