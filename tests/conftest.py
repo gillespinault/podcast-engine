@@ -31,8 +31,24 @@ def event_loop() -> Generator:
 # ============================================================================
 
 @pytest.fixture
-def client() -> TestClient:
-    """FastAPI test client"""
+def client(mock_kokoro_tts) -> TestClient:
+    """
+    FastAPI test client with mocked app.state
+
+    Initializes app.state attributes normally set in lifespan()
+    """
+    # Initialize app state (normally done in lifespan contextmanager)
+    import time
+    from app.core.tts import KokoroTTSClient
+
+    app.state.start_time = time.time()
+    app.state.tts_client = KokoroTTSClient()
+    app.state.available_voices = {
+        "af_bella": {"name": "Bella", "gender": "Female", "language": "en", "accent": "American"},
+        "ff_siwis": {"name": "Siwis", "gender": "Female", "language": "fr", "accent": "French"},
+        "jf_alpha": {"name": "Alpha", "gender": "Female", "language": "ja", "accent": "Japanese"},
+    }
+
     return TestClient(app)
 
 
@@ -63,7 +79,7 @@ def mock_kokoro_tts(monkeypatch, mock_tts_audio):
         await asyncio.sleep(0.01)  # Simulate network delay
         return mock_tts_audio
 
-    async def fake_get_available_voices():
+    async def fake_get_available_voices(self):
         """Return minimal voice list"""
         return {
             "af_bella": {"name": "Bella", "gender": "Female", "language": "en", "accent": "American"},
@@ -71,7 +87,7 @@ def mock_kokoro_tts(monkeypatch, mock_tts_audio):
             "jf_alpha": {"name": "Alpha", "gender": "Female", "language": "ja", "accent": "Japanese"},
         }
 
-    async def fake_health_check():
+    async def fake_health_check(self):
         """Return healthy status"""
         return {"status": "healthy", "service": "Kokoro TTS"}
 
