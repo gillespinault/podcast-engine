@@ -22,12 +22,40 @@ class Settings(BaseSettings):
     api_workers: int = Field(default=2, ge=1, le=10, description="Uvicorn workers")
     cors_origins: list[str] = Field(default=["*"], description="CORS allowed origins")
 
-    # External Services
+    # External Services - TTS Providers
+    tts_provider: str = Field(
+        default="google,piper,kokoro",
+        description="TTS provider priority (comma-separated: google,piper,kokoro)"
+    )
+
+    # Kokoro TTS (self-hosted, CPU, unstable memory leak)
     kokoro_tts_url: HttpUrl = Field(
         default="http://serverlabapps-kokorotts-skwerq:8880/v1/audio/speech",
         description="Kokoro TTS API endpoint"
     )
     kokoro_timeout: int = Field(default=120, ge=10, le=600, description="Kokoro API timeout (seconds)")
+
+    # Piper TTS via openedai-speech (self-hosted, CPU, stable)
+    piper_tts_url: HttpUrl = Field(
+        default="http://aistack-openedaispeech-c4c1sy:8000/v1/audio/speech",
+        description="Piper TTS API endpoint (openedai-speech)"
+    )
+    piper_timeout: int = Field(default=60, ge=10, le=300, description="Piper API timeout (seconds)")
+
+    # Google Cloud TTS (cloud, pay-per-use, 1M chars free/month)
+    google_cloud_project_id: Optional[str] = Field(
+        default=None,
+        description="Google Cloud Project ID (required for Google TTS)"
+    )
+    google_cloud_credentials_json: Optional[str] = Field(
+        default=None,
+        description="Google Cloud service account JSON (base64 encoded, optional)"
+    )
+    google_tts_voice: str = Field(
+        default="fr-FR-Neural2-A",
+        description="Google Cloud TTS voice name"
+    )
+    google_tts_timeout: int = Field(default=60, ge=10, le=300, description="Google TTS timeout (seconds)")
 
     # Redis Queue (Job Persistence)
     redis_host: str = Field(default="projects-redis", description="Redis host")

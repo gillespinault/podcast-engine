@@ -18,7 +18,7 @@ import httpx
 from app.config import settings, AUDIO_FORMATS
 from app.api.models import ProcessingStats, WebhookPodcastRequest
 from app.core.chunking import TextChunker
-from app.core.tts import KokoroTTSClient
+from app.core.tts_providers import TTSProviderManager
 from app.core.audio import AudioProcessor
 
 
@@ -294,7 +294,7 @@ async def _process_chapter_to_audio(
     chapter_info: dict,
     output_dir: Path,
     podcast_req,
-    tts_client: KokoroTTSClient,
+    tts_client: TTSProviderManager,
     audio_processor: AudioProcessor,
     cover_image_path: Path = None
 ) -> dict:
@@ -506,7 +506,8 @@ async def _process_multi_file_audiobook(
         logger.info(f"[{job_id}] Initialized {total_chapters} chapters in progress tracker")
 
         # Initialize shared TTS client and audio processor
-        tts_client = KokoroTTSClient()
+        tts_client = TTSProviderManager()
+        await tts_client.initialize()
         audio_processor = AudioProcessor()
 
         try:
@@ -795,7 +796,8 @@ async def _process_podcast_job_async(
         estimated_tts_time = len(chunks) * 20  # Rough estimate: 20s per chunk
         update_job_progress(job_id, 2, "TTS synthesis", 15, estimated_tts_time)
 
-        tts_client = KokoroTTSClient()
+        tts_client = TTSProviderManager()
+        await tts_client.initialize()
         try:
             # Use retry wrapper for TTS calls
             tts_results = await _synthesize_with_retry(

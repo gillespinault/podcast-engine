@@ -20,6 +20,9 @@ google-genai==1.45.0        # Google Gen AI SDK (unified, GA, stable - migrated 
 langdetect==1.0.9           # Fallback language detection
 json-repair==0.34.0         # Fix malformed JSON from LLM responses
 
+# TTS integration (Google Cloud Text-to-Speech for production)
+google-cloud-texttospeech==2.18.0  # Google Cloud TTS (Neural2 voices, 1M chars free/month)
+
 # Data validation and settings
 pydantic==2.9.2
 pydantic-settings==2.6.0
