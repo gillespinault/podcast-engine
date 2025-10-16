@@ -380,26 +380,82 @@ class TTSProviderManager:
             except Exception as e:
                 logger.warning(f"[TTSProviderManager] Failed to close {provider.name}: {e}")
 
+    async def get_provider_by_id(self, provider_id: str) -> Optional[BaseTTSClient]:
+        """
+        Get a specific provider by ID (google, piper, kokoro).
+
+        Args:
+            provider_id: Provider identifier (google, piper, kokoro)
+
+        Returns:
+            Provider instance if found, None otherwise
+        """
+        provider_id = provider_id.lower()
+        for provider in self.providers:
+            # Extract provider ID from name (e.g., "Google Cloud TTS" → "google")
+            provider_name = provider.name.lower().split()[0]
+            if provider_name == provider_id:
+                return provider
+        return None
+
     async def synthesize_chunk(
         self,
         text: str,
         voice: str = "af_bella",
         speed: float = 1.0,
         response_format: str = "mp3",
+        provider: Optional[str] = None,
     ) -> bytes:
         """
-        Synthesize audio with automatic provider fallback.
+        Synthesize audio with automatic provider fallback (or explicit provider selection).
 
-        Tries each provider in order until one succeeds.
-        Raises exception only if all providers fail.
+        Args:
+            text: Text to synthesize
+            voice: Voice ID (provider-specific or cross-provider)
+            speed: Speech speed (0.5-2.0)
+            response_format: Audio format (mp3, opus, etc.)
+            provider: Optional explicit provider ID (google, piper, kokoro).
+                     If specified, uses only that provider (no fallback).
+                     If None, uses automatic fallback through all providers.
+
+        Returns:
+            Audio bytes
+
+        Raises:
+            ValueError: If explicit provider is specified but not found
+            RuntimeError: If all providers fail (automatic mode) or explicit provider fails
         """
-        last_error = None
+        # Explicit provider selection (no fallback)
+        if provider:
+            provider_client = await self.get_provider_by_id(provider)
+            if not provider_client:
+                available_providers = ", ".join([p.name.lower().split()[0] for p in self.providers])
+                raise ValueError(
+                    f"Provider '{provider}' not found or not initialized. "
+                    f"Available providers: {available_providers}"
+                )
 
-        for idx, provider in enumerate(self.providers):
+            logger.info(f"[TTSProviderManager] Using explicit provider: {provider_client.name}")
             try:
-                logger.debug(f"[TTSProviderManager] Trying provider {idx+1}/{len(self.providers)}: {provider.name}")
+                audio_data = await provider_client.synthesize_chunk(
+                    text=text,
+                    voice=voice,
+                    speed=speed,
+                    response_format=response_format
+                )
+                logger.success(f"[TTSProviderManager] Synthesis successful with {provider_client.name}")
+                return audio_data
+            except Exception as e:
+                logger.error(f"[TTSProviderManager] Explicit provider {provider_client.name} failed: {e}")
+                raise RuntimeError(f"Provider '{provider}' failed: {e}")
 
-                audio_data = await provider.synthesize_chunk(
+        # Automatic fallback mode (try all providers in order)
+        last_error = None
+        for idx, provider_client in enumerate(self.providers):
+            try:
+                logger.debug(f"[TTSProviderManager] Trying provider {idx+1}/{len(self.providers)}: {provider_client.name}")
+
+                audio_data = await provider_client.synthesize_chunk(
                     text=text,
                     voice=voice,
                     speed=speed,
@@ -407,15 +463,15 @@ class TTSProviderManager:
                 )
 
                 # Success! Update current provider if changed
-                if provider != self.current_provider:
-                    logger.info(f"[TTSProviderManager] Switched to {provider.name} (fallback success)")
-                    self.current_provider = provider
+                if provider_client != self.current_provider:
+                    logger.info(f"[TTSProviderManager] Switched to {provider_client.name} (fallback success)")
+                    self.current_provider = provider_client
 
-                logger.success(f"[TTSProviderManager] Synthesis successful with {provider.name}")
+                logger.success(f"[TTSProviderManager] Synthesis successful with {provider_client.name}")
                 return audio_data
 
             except Exception as e:
-                logger.warning(f"[TTSProviderManager] {provider.name} failed: {e}")
+                logger.warning(f"[TTSProviderManager] {provider_client.name} failed: {e}")
                 last_error = e
 
                 # Try next provider
@@ -434,10 +490,24 @@ class TTSProviderManager:
         speed: float = 1.0,
         max_parallel: int = 5,
         pause_between: float = 0.5,
+        provider: Optional[str] = None,
     ) -> List[Tuple[int, Path, bool]]:
         """
         Synthesize multiple chunks in parallel with controlled concurrency.
-        Uses current provider with fallback support per chunk.
+
+        Args:
+            chunks: List of (chunk_id, text, chapter_title) tuples
+            output_dir: Directory to save audio chunks
+            voice: Voice ID (provider-specific or cross-provider)
+            speed: Speech speed (0.5-2.0)
+            max_parallel: Maximum parallel requests
+            pause_between: Silence between chunks (seconds)
+            provider: Optional explicit provider ID (google, piper, kokoro).
+                     If specified, uses only that provider for all chunks.
+                     If None, uses automatic fallback through all providers.
+
+        Returns:
+            List of (chunk_id, output_path, success) tuples
         """
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -458,12 +528,13 @@ class TTSProviderManager:
                     else:
                         text_with_marker = text
 
-                    # Synthesize with automatic fallback
+                    # Synthesize with explicit provider or automatic fallback
                     audio_bytes = await self.synthesize_chunk(
                         text=text_with_marker,
                         voice=voice,
                         speed=speed,
-                        response_format="mp3"
+                        response_format="mp3",
+                        provider=provider  # Pass provider parameter through
                     )
 
                     # Save to file

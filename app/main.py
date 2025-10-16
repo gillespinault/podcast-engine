@@ -29,6 +29,10 @@ from app.api.models import (
     TTSOptions,
     AudioOptions,
     ProcessingOptions,
+    TTSProviderInfo,
+    TTSVoiceInfo,
+    TTSProvidersResponse,
+    TTSVoicesResponse,
 )
 from app.core.chunking import TextChunker
 from app.core.tts_providers import TTSProviderManager
@@ -188,6 +192,144 @@ async def get_voices(request: Request, language: str = None):
         return filtered_voices
     else:
         return all_voices
+
+
+@app.get("/api/v1/tts/providers", response_model=TTSProvidersResponse, tags=["TTS"])
+async def get_tts_providers(request: Request):
+    """
+    Get list of available TTS providers
+
+    Returns information about all configured TTS providers:
+    - Google Cloud TTS (Neural2 voices, 1M chars/month free)
+    - Piper TTS (self-hosted, CPU-optimized)
+    - Kokoro TTS (self-hosted, fallback)
+
+    Returns:
+        TTSProvidersResponse with list of providers and default provider
+    """
+    tts_manager: TTSProviderManager = request.app.state.tts_client
+
+    # Provider metadata
+    provider_metadata = {
+        "google": {
+            "id": "google",
+            "name": "Google Cloud TTS",
+            "description": "High-quality Neural2 voices with natural prosody. Free tier: 1M characters/month.",
+            "languages": ["fr", "en", "es", "de", "it", "pt", "ja", "zh"]
+        },
+        "piper": {
+            "id": "piper",
+            "name": "Piper TTS",
+            "description": "Self-hosted TTS engine via openedai-speech. CPU-optimized, fast inference (<1s latency).",
+            "languages": ["fr", "en", "es", "de"]
+        },
+        "kokoro": {
+            "id": "kokoro",
+            "name": "Kokoro TTS",
+            "description": "Self-hosted multilingual TTS. Fallback provider (known memory issues).",
+            "languages": ["fr", "en", "es", "ja", "zh", "pt", "it", "hi"]
+        }
+    }
+
+    # Build list of available providers based on initialized providers
+    providers_list = []
+    for provider in tts_manager.providers:
+        provider_id = provider.name.lower().split()[0]  # Extract "google" from "Google Cloud TTS"
+
+        if provider_id in provider_metadata:
+            metadata = provider_metadata[provider_id]
+            providers_list.append(TTSProviderInfo(
+                id=metadata["id"],
+                name=metadata["name"],
+                description=metadata["description"],
+                available=True,  # Provider is initialized, so it's available
+                languages=metadata["languages"]
+            ))
+
+    # Get default provider (first in list)
+    default_provider_id = tts_manager.current_provider.name.lower().split()[0] if tts_manager.current_provider else "google"
+
+    return TTSProvidersResponse(
+        providers=providers_list,
+        default_provider=default_provider_id
+    )
+
+
+@app.get("/api/v1/tts/voices", response_model=TTSVoicesResponse, tags=["TTS"])
+async def get_tts_voices(
+    request: Request,
+    provider: str = None,
+    language: str = None
+):
+    """
+    Get list of available TTS voices, optionally filtered by provider and/or language
+
+    Args:
+        provider: Filter by provider (google, piper, kokoro)
+        language: Filter by language code (fr, en, es, etc.)
+
+    Returns:
+        TTSVoicesResponse with list of voices matching filters
+
+    Examples:
+        GET /api/v1/tts/voices - All voices from all providers
+        GET /api/v1/tts/voices?provider=google - All Google voices
+        GET /api/v1/tts/voices?language=fr - All French voices
+        GET /api/v1/tts/voices?provider=google&language=fr - Google French voices
+    """
+    # Voice catalog (comprehensive list of voices per provider)
+    voice_catalog = {
+        "google": [
+            TTSVoiceInfo(id="fr-FR-Neural2-A", name="French Female (Neural2-A)", language="fr", gender="female", accent="French", provider="google"),
+            TTSVoiceInfo(id="fr-FR-Neural2-B", name="French Male (Neural2-B)", language="fr", gender="male", accent="French", provider="google"),
+            TTSVoiceInfo(id="fr-FR-Neural2-C", name="French Female (Neural2-C)", language="fr", gender="female", accent="French", provider="google"),
+            TTSVoiceInfo(id="fr-FR-Neural2-D", name="French Male (Neural2-D)", language="fr", gender="male", accent="French", provider="google"),
+            TTSVoiceInfo(id="fr-FR-Neural2-E", name="French Female (Neural2-E)", language="fr", gender="female", accent="French", provider="google"),
+            TTSVoiceInfo(id="en-US-Neural2-A", name="American Male (Neural2-A)", language="en", gender="male", accent="American", provider="google"),
+            TTSVoiceInfo(id="en-US-Neural2-C", name="American Female (Neural2-C)", language="en", gender="female", accent="American", provider="google"),
+            TTSVoiceInfo(id="en-US-Neural2-D", name="American Male (Neural2-D)", language="en", gender="male", accent="American", provider="google"),
+            TTSVoiceInfo(id="en-US-Neural2-F", name="American Female (Neural2-F)", language="en", gender="female", accent="American", provider="google"),
+            TTSVoiceInfo(id="en-US-Neural2-H", name="American Female (Neural2-H)", language="en", gender="female", accent="American", provider="google"),
+        ],
+        "piper": [
+            TTSVoiceInfo(id="fr_FR-siwis-medium", name="French Siwis (Medium)", language="fr", gender="female", accent="French", provider="piper"),
+            TTSVoiceInfo(id="en_US-lessac-medium", name="American Lessac (Medium)", language="en", gender="female", accent="American", provider="piper"),
+        ],
+        "kokoro": [
+            TTSVoiceInfo(id="ff_siwis", name="French Female (Siwis)", language="fr", gender="female", accent="French", provider="kokoro"),
+            TTSVoiceInfo(id="ff_bella", name="French Female (Bella)", language="fr", gender="female", accent="French", provider="kokoro"),
+            TTSVoiceInfo(id="ff_sarah", name="French Female (Sarah)", language="fr", gender="female", accent="French", provider="kokoro"),
+            TTSVoiceInfo(id="af_bella", name="American Female (Bella)", language="en", gender="female", accent="American", provider="kokoro"),
+            TTSVoiceInfo(id="af_sarah", name="American Female (Sarah)", language="en", gender="female", accent="American", provider="kokoro"),
+            TTSVoiceInfo(id="am_adam", name="American Male (Adam)", language="en", gender="male", accent="American", provider="kokoro"),
+            TTSVoiceInfo(id="am_michael", name="American Male (Michael)", language="en", gender="male", accent="American", provider="kokoro"),
+        ]
+    }
+
+    # Collect all voices (or filter by provider)
+    all_voices = []
+    if provider:
+        # Single provider
+        if provider.lower() in voice_catalog:
+            all_voices = voice_catalog[provider.lower()]
+        else:
+            # Unknown provider - return empty list
+            return TTSVoicesResponse(voices=[], provider=provider, language=language)
+    else:
+        # All providers
+        for voices in voice_catalog.values():
+            all_voices.extend(voices)
+
+    # Filter by language if specified
+    if language:
+        all_voices = [v for v in all_voices if v.language == language.lower()]
+
+    # Return filtered voices
+    return TTSVoicesResponse(
+        voices=all_voices,
+        provider=provider or "all",
+        language=language
+    )
 
 
 @app.post("/api/v1/extract-metadata", tags=["Metadata"])
@@ -819,6 +961,7 @@ async def create_podcast(
             speed=podcast_req.tts_options.speed,
             max_parallel=podcast_req.processing_options.max_parallel_tts,
             pause_between=podcast_req.tts_options.pause_between_chunks,
+            provider=podcast_req.tts_options.provider,  # Pass provider selection
         )
 
         # Check for failures
@@ -1008,6 +1151,7 @@ async def _process_podcast_job_async(
                 speed=podcast_req.tts_options.speed,
                 max_parallel=podcast_req.processing_options.max_parallel_tts,
                 pause_between=podcast_req.tts_options.pause_between_chunks,
+                provider=podcast_req.tts_options.provider,  # Pass provider selection
             )
         finally:
             # Always close the dedicated client to free resources
@@ -1343,6 +1487,7 @@ async def webhook_create_podcast(
             speed=podcast_req.tts_options.speed,
             max_parallel=podcast_req.processing_options.max_parallel_tts,
             pause_between=podcast_req.tts_options.pause_between_chunks,
+            provider=podcast_req.tts_options.provider,  # Pass provider selection
         )
 
         # Check for failures
