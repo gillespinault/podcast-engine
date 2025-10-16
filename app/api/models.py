@@ -51,9 +51,13 @@ class PodcastMetadata(BaseModel):
 
 class TTSOptions(BaseModel):
     """Text-to-Speech configuration options"""
+    provider: Optional[str] = Field(
+        default=None,
+        description="TTS provider to use (google, piper, kokoro). If None, uses priority order from config (google→piper→kokoro with automatic fallback)"
+    )
     voice: str = Field(
         default="af_bella",
-        description="TTS voice ID (Kokoro voices: af_bella, af_sarah, af_nicole, bf_emma, bf_isabella, am_adam, am_michael, bm_george, bm_lewis)"
+        description="TTS voice ID (Kokoro voices: af_bella, af_sarah, ff_siwis; Google voices: fr-FR-Neural2-A; Piper voices: fr_FR-siwis-medium)"
     )
     speed: float = Field(default=1.0, ge=0.5, le=2.0, description="Speech speed (0.5 = slow, 2.0 = fast)")
     chunk_size: int = Field(default=4000, ge=1000, le=10000, description="Max characters per TTS chunk")
@@ -219,6 +223,101 @@ class HealthResponse(BaseModel):
     uptime_seconds: float
     services: dict = Field(description="Status of dependent services (Kokoro TTS, etc.)")
     system: dict = Field(description="System resources (disk, memory)")
+
+
+class TTSProviderInfo(BaseModel):
+    """Information about a TTS provider"""
+    id: str = Field(description="Provider ID (google, piper, kokoro)")
+    name: str = Field(description="Provider display name")
+    description: str = Field(description="Provider description")
+    available: bool = Field(description="Whether provider is available/configured")
+    languages: List[str] = Field(description="Supported language codes (ISO 639-1)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "google",
+                "name": "Google Cloud TTS",
+                "description": "Google Cloud Text-to-Speech with Neural2 voices (1M chars/month free)",
+                "available": True,
+                "languages": ["fr", "en", "es", "de"]
+            }
+        }
+
+
+class TTSVoiceInfo(BaseModel):
+    """Information about a TTS voice"""
+    id: str = Field(description="Voice ID used in API calls")
+    name: str = Field(description="Human-readable voice name")
+    language: str = Field(description="Language code (ISO 639-1)")
+    gender: Optional[str] = Field(default=None, description="Voice gender (male/female)")
+    accent: Optional[str] = Field(default=None, description="Accent/region (e.g., American, British, French)")
+    provider: str = Field(description="Provider ID (google, piper, kokoro)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "fr-FR-Neural2-A",
+                "name": "French Female (Neural2-A)",
+                "language": "fr",
+                "gender": "female",
+                "accent": "French",
+                "provider": "google"
+            }
+        }
+
+
+class TTSProvidersResponse(BaseModel):
+    """List of available TTS providers"""
+    providers: List[TTSProviderInfo]
+    default_provider: str = Field(description="Default provider ID")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "providers": [
+                    {
+                        "id": "google",
+                        "name": "Google Cloud TTS",
+                        "description": "High-quality Neural2 voices",
+                        "available": True,
+                        "languages": ["fr", "en"]
+                    },
+                    {
+                        "id": "piper",
+                        "name": "Piper TTS",
+                        "description": "Self-hosted CPU-optimized TTS",
+                        "available": True,
+                        "languages": ["fr", "en"]
+                    }
+                ],
+                "default_provider": "google"
+            }
+        }
+
+
+class TTSVoicesResponse(BaseModel):
+    """List of available TTS voices"""
+    voices: List[TTSVoiceInfo]
+    provider: str = Field(description="Provider ID for these voices")
+    language: Optional[str] = Field(default=None, description="Language filter applied (if any)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "voices": [
+                    {
+                        "id": "fr-FR-Neural2-A",
+                        "name": "French Female (Neural2-A)",
+                        "language": "fr",
+                        "gender": "female",
+                        "provider": "google"
+                    }
+                ],
+                "provider": "google",
+                "language": "fr"
+            }
+        }
 
 
 # ============================================================================
