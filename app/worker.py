@@ -481,6 +481,41 @@ async def _process_multi_file_audiobook(
         logger.info(f"[{job_id}]  └─ Total size: {total_size/1024/1024:.1f} MB")
         logger.info(f"[{job_id}]  └─ Processing time: {processing_time:.1f}s")
 
+        # Copy to AudioBookshelf audiobooks directory (not podcasts!)
+        try:
+            # AudioBookshelf audiobooks directory (mounted volume)
+            abs_audiobooks = Path("/audiobooks")
+
+            if abs_audiobooks.exists():
+                # Create book folder in AudioBookshelf with same name as local folder
+                audiobook_name = audiobook_dir.name
+                abs_dest_dir = abs_audiobooks / audiobook_name
+                abs_dest_dir.mkdir(parents=True, exist_ok=True)
+
+                # Copy all chapter files + cover to AudioBookshelf
+                import shutil
+                files_copied = 0
+                for chapter_file in audiobook_dir.glob("*.m4a"):
+                    dest_file = abs_dest_dir / chapter_file.name
+                    shutil.copy2(chapter_file, dest_file)
+                    files_copied += 1
+
+                # Copy cover if exists
+                if cover_image_path and cover_image_path.exists():
+                    cover_dest = abs_dest_dir / "cover.jpg"
+                    shutil.copy2(cover_image_path, cover_dest)
+                    logger.info(f"[{job_id}] 📷 Cover copied to AudioBookshelf")
+
+                logger.success(f"[{job_id}] 📚 Copied to AudioBookshelf: /audiobooks/{audiobook_name}/ ({files_copied} chapters)")
+                logger.info(f"[{job_id}]  └─ AudioBookshelf will display this as a multi-chapter audiobook")
+            else:
+                logger.warning(f"[{job_id}] AudioBookshelf audiobooks directory not found: {abs_audiobooks}")
+                logger.info(f"[{job_id}] Files remain available at: {audiobook_dir}")
+        except Exception as e:
+            # Non-fatal: log warning but don't fail the job
+            logger.warning(f"[{job_id}] Failed to copy to AudioBookshelf: {e}")
+            logger.info(f"[{job_id}] Files still available at: {audiobook_dir}")
+
         # Update progress to 100%
         update_job_progress(job_id, 6, "Complete", 100)
 

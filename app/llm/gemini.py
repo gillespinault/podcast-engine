@@ -366,3 +366,154 @@ Return format: Just the 2-letter code, nothing else.
             except Exception as e2:
                 logger.error(f"Gemini language detection fallback failed: {e2}")
                 return "en"  # Ultimate fallback
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=4, max=60),
+        reraise=True
+    )
+    def extract_metadata(
+        self,
+        text: str,
+        filename: str = None,
+        source_url: str = None
+    ) -> Dict:
+        """
+        Extract metadata from content using Gemini (for autofill feature)
+
+        Analyzes text to extract:
+        - Title (from content or filename)
+        - Author
+        - Language (ISO 639-1)
+        - Description (1-2 sentence summary)
+        - Genre
+        - Tags (keywords)
+        - Publication date (if available)
+        - Voice suggestion based on language
+
+        Args:
+            text: Full content text (will be truncated to 50k chars for analysis)
+            filename: Optional filename hint (e.g., "deep-learning.pdf")
+            source_url: Optional source URL hint (e.g., "https://example.com/article")
+
+        Returns:
+            {
+                "title": "Extracted title",
+                "author": "Author Name",
+                "language": "fr",
+                "description": "Brief summary...",
+                "genre": "Technology",
+                "tags": ["AI", "machine-learning", "education"],
+                "publication_date": "2025" (or None),
+                "voice_suggestion": "ff_siwis"
+            }
+
+        Raises:
+            Exception: If Gemini API call fails after retries
+        """
+        # Truncate text to reasonable size for metadata extraction
+        text_sample = text[:50000]  # First 50k chars should be enough
+        if len(text) > 50000:
+            logger.info(f"Text truncated from {len(text)} to 50,000 chars for metadata extraction")
+
+        # Build prompt with hints
+        hints = []
+        if filename:
+            hints.append(f"**Filename**: {filename}")
+        if source_url:
+            hints.append(f"**Source URL**: {source_url}")
+
+        hints_text = "\n".join(hints) if hints else "(No hints provided)"
+
+        prompt = f"""
+You are an expert at analyzing documents and extracting metadata.
+
+**Task**: Extract metadata from this content for podcast/audiobook creation.
+
+**Content to analyze**:
+```
+{text_sample}
+```
+
+**Hints**:
+{hints_text}
+
+**Instructions**:
+1. **Title**: Extract the main title from the content. If no clear title exists, generate one based on the main topic. Keep it concise (max 100 chars).
+
+2. **Author**: Identify the author if mentioned in the text. If not found, use "Unknown" or the website name (if source_url provided).
+
+3. **Language**: Detect the primary language and return ISO 639-1 code (fr, en, es, de, it, pt, nl, pl, ru, ja, zh, etc.).
+
+4. **Description**: Write a 1-2 sentence summary of the content (max 200 chars).
+
+5. **Genre**: Classify the content genre (Technology, Science, Business, Education, News, Fiction, etc.).
+
+6. **Tags**: Extract 3-7 relevant keywords/topics from the content.
+
+7. **Publication Date**: If a publication date is mentioned, extract it (format: YYYY or YYYY-MM-DD). If not found, return null.
+
+8. **Voice Suggestion**: Based on detected language, suggest appropriate TTS voice:
+   - French → "ff_siwis" (female) or "fm_brune" (male)
+   - English → "af_bella" (female) or "am_adam" (male)
+   - Spanish → "sf_isabella" (female) or "sm_diego" (male)
+   - German → "gf_heidi" (female) or "gm_klaus" (male)
+   - Italian → "if_sofia" (female) or "im_marco" (male)
+   - Portuguese → "pf_maria" (female) or "pm_joao" (male)
+   - Default → "af_bella" (English female)
+
+**Output Format** (MUST BE VALID JSON):
+{{
+  "title": "Clear, concise title",
+  "author": "Author Name or Unknown",
+  "language": "fr",
+  "description": "Brief 1-2 sentence summary",
+  "genre": "Technology",
+  "tags": ["tag1", "tag2", "tag3"],
+  "publication_date": "2025" or null,
+  "voice_suggestion": "ff_siwis"
+}}
+
+**CRITICAL**:
+- Return ONLY valid JSON, no markdown code blocks
+- Language detection is MANDATORY (field "language")
+- All fields are required (use "Unknown" or null if information not available)
+"""
+
+        logger.info(f"Sending text to Gemini for metadata extraction (text_length={len(text_sample)})")
+
+        try:
+            response = self.model.generate_content(prompt)
+            logger.info("Gemini metadata extraction complete, parsing response")
+
+            # Try to parse JSON response
+            result = self._parse_gemini_response(response.text)
+
+            # Validate required fields
+            required_fields = ["title", "author", "language", "description", "genre", "tags", "voice_suggestion"]
+            for field in required_fields:
+                if field not in result or result[field] is None:
+                    logger.warning(f"Missing field '{field}' in Gemini metadata response, using default")
+                    # Provide defaults
+                    defaults = {
+                        "title": filename or "Untitled",
+                        "author": "Unknown",
+                        "language": "en",
+                        "description": "No description available",
+                        "genre": "Unknown",
+                        "tags": [],
+                        "voice_suggestion": "af_bella"
+                    }
+                    result[field] = defaults.get(field, "Unknown")
+
+            logger.info(
+                f"Metadata extracted: title='{result['title']}', "
+                f"author='{result['author']}', language={result['language']}, "
+                f"genre={result['genre']}, tags={len(result['tags'])}"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Gemini metadata extraction failed: {e}")
+            raise
