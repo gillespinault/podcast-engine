@@ -33,7 +33,7 @@ from app.api.models import (
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
-from app.core.pdf_processor import SimplePDFProcessor, validate_pdf, extract_cover, PDFValidationError
+from app.core.pdf_processor import SimplePDFProcessor, validate_pdf, PDFValidationError
 from app.llm.gemini import GeminiClient
 from app.llm.voice_selector import select_voice
 from app.worker import enqueue_podcast_job, redis_conn, podcast_queue  # RQ job queue
@@ -256,7 +256,7 @@ async def extract_metadata(
                 validate_pdf(tmp_pdf_path)
 
                 # Upload PDF to Gemini File API and extract metadata
-                logger.info(f"Uploading PDF to Gemini File API for metadata extraction")
+                logger.info("Uploading PDF to Gemini File API for metadata extraction")
                 gemini_client = GeminiClient()
 
                 # Upload PDF file
