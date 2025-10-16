@@ -11,6 +11,15 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
 import re
 
+# JSON repair for handling malformed Gemini responses
+try:
+    from json_repair import repair_json
+    JSON_REPAIR_AVAILABLE = True
+except ImportError:
+    JSON_REPAIR_AVAILABLE = False
+    logger = logging.getLogger(__name__)
+    logger.warning("json_repair not installed, using fallback JSON parser")
+
 logger = logging.getLogger(__name__)
 
 
@@ -215,10 +224,32 @@ You are an expert at analyzing documents and preparing them for audiobook narrat
         Raises:
             ValueError: If JSON parsing fails
         """
+        # Helper function to attempt JSON parsing with repair
+        def try_parse_with_repair(json_str: str) -> Dict:
+            try:
+                # Try direct parsing first
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                # Try JSON repair if available
+                if JSON_REPAIR_AVAILABLE:
+                    logger.warning(f"JSON parsing failed ({e}), attempting repair")
+                    try:
+                        repaired = repair_json(json_str)
+                        result = json.loads(repaired)
+                        logger.info("JSON successfully repaired")
+                        return result
+                    except Exception as repair_error:
+                        logger.error(f"JSON repair failed: {repair_error}")
+                        raise ValueError(
+                            f"Gemini returned malformed JSON: {e}. Repair failed: {repair_error}"
+                        )
+                else:
+                    raise ValueError(f"Gemini returned malformed JSON: {e}")
+
         try:
             # Try direct JSON parsing first
-            return json.loads(response_text)
-        except json.JSONDecodeError:
+            return try_parse_with_repair(response_text)
+        except ValueError:
             # Try to extract JSON from markdown code block
             logger.warning("Direct JSON parsing failed, trying markdown extraction")
 
@@ -231,21 +262,19 @@ You are an expert at analyzing documents and preparing them for audiobook narrat
 
             if json_match:
                 try:
-                    return json.loads(json_match.group(1))
-                except json.JSONDecodeError as e:
+                    return try_parse_with_repair(json_match.group(1))
+                except ValueError as e:
                     logger.error(f"JSON extraction from markdown failed: {e}")
-                    raise ValueError(
-                        f"Gemini returned malformed JSON in markdown block: {e}"
-                    )
+                    raise
 
             # Last resort: try to find any JSON object
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 try:
-                    return json.loads(json_match.group(0))
-                except json.JSONDecodeError as e:
+                    return try_parse_with_repair(json_match.group(0))
+                except ValueError as e:
                     logger.error(f"JSON extraction from text failed: {e}")
-                    raise ValueError(f"Gemini returned malformed JSON: {e}")
+                    raise
 
             # Complete failure
             logger.error(f"No valid JSON found in response: {response_text[:500]}")
