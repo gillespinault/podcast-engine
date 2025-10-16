@@ -3,7 +3,7 @@ Podcast Engine - API Models
 Pydantic models for request/response validation
 """
 from typing import Optional, List, Literal
-from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from datetime import datetime
 
 
@@ -265,16 +265,50 @@ class ChapterInfo(BaseModel):
         }
 
 
-class WebhookPodcastRequest(PodcastRequest):
-    """Extended podcast request for webhook endpoint with callbacks & chapters"""
+class WebhookPodcastRequest(BaseModel):
+    """Extended podcast request for webhook endpoint with callbacks & chapters
+
+    Supports two modes:
+    1. Text mode: Provide `text` field (min 100 chars)
+    2. Chapters mode: Provide `chapters` list (text can be dummy value)
+    """
+    # Text field is optional when chapters are provided (PDF mode)
+    text: str = Field(
+        default="",
+        min_length=0,
+        max_length=5_000_000,
+        description="Text content to convert (required unless chapters are provided)"
+    )
+    metadata: PodcastMetadata
+    tts_options: TTSOptions = Field(default_factory=TTSOptions)
+    audio_options: AudioOptions = Field(default_factory=AudioOptions)
+    processing_options: ProcessingOptions = Field(default_factory=ProcessingOptions)
+
     callbacks: Optional[WebhookCallbacks] = Field(
         default=None,
         description="Optional tracking callbacks for n8n workflows"
     )
     chapters: Optional[List[ChapterInfo]] = Field(
         default=None,
-        description="Optional chapter information for multi-chapter audiobooks"
+        description="Optional chapter information for multi-chapter audiobooks (PDF mode)"
     )
+
+    @model_validator(mode='after')
+    def validate_text_or_chapters(self):
+        """Validate that either text OR chapters are provided with sufficient content"""
+        if self.chapters:
+            # Chapters mode: text validation is skipped
+            if not self.chapters or len(self.chapters) == 0:
+                raise ValueError("chapters list cannot be empty if provided")
+            return self
+        else:
+            # Text mode: text must be at least 100 characters
+            if not self.text or len(self.text.strip()) < 100:
+                raise ValueError(
+                    "text must be at least 100 characters when chapters are not provided. "
+                    "For PDF mode, use chapters instead."
+                )
+            return self
 
     class Config:
         json_schema_extra = {
