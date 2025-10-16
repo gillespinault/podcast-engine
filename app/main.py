@@ -431,23 +431,36 @@ async def create_podcast(
             logger.info(f"[{job_id}] Auto-selected voice: {selected_voice} (language={detected_language})")
             tts_options.voice = selected_voice
 
-            # Step 5: Concatenate chapters into single text (for now, Phase 4 will handle multi-file)
-            full_text = "\n\n".join([f"# {ch['title']}\n\n{ch['text']}" for ch in chapters])
-            logger.info(f"[{job_id}] Concatenated {len(chapters)} chapters into {len(full_text)} characters")
-
             # Update metadata with detected language
             metadata.language = detected_language
 
-            # Build PodcastRequest for standard pipeline
-            podcast_req = PodcastRequest(
-                text=full_text,
+            # Step 5: Build WebhookPodcastRequest with chapters for multi-file output
+            # Convert Gemini chapters to ChapterInfo models
+            from app.api.models import ChapterInfo, WebhookPodcastRequest
+
+            chapter_infos = [
+                ChapterInfo(
+                    title=ch['title'],
+                    text=ch['text'],
+                    start_time=None  # Will be calculated during processing
+                )
+                for ch in chapters
+            ]
+
+            logger.info(f"[{job_id}] Prepared {len(chapter_infos)} chapters for multi-file output")
+
+            # Build WebhookPodcastRequest with chapters (triggers multi-file mode in worker)
+            # Use dummy text (required by model validation, but not used in multi-file mode)
+            podcast_req = WebhookPodcastRequest(
+                text="[PDF Mode - Text replaced by chapters]",
                 metadata=metadata,
                 tts_options=tts_options,
                 audio_options=audio_options,
-                processing_options=processing_options
+                processing_options=processing_options,
+                chapters=chapter_infos  # Multi-file mode: process each chapter separately
             )
 
-            logger.info(f"[{job_id}] PDF pipeline complete, proceeding to TTS synthesis")
+            logger.info(f"[{job_id}] PDF pipeline complete, proceeding to multi-file TTS synthesis ({len(chapters)} chapters)")
 
         except HTTPException:
             raise

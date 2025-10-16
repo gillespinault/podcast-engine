@@ -238,6 +238,313 @@ def process_podcast_job(
     ))
 
 
+async def _process_chapter_to_audio(
+    job_id: str,
+    chapter_index: int,
+    chapter_info: dict,
+    output_dir: Path,
+    podcast_req,
+    tts_client: KokoroTTSClient,
+    audio_processor: AudioProcessor,
+    cover_image_path: Path = None
+) -> dict:
+    """
+    Process a single chapter: chunking → TTS → merge → metadata → save as separate file
+
+    Args:
+        job_id: Job identifier for logging
+        chapter_index: Chapter number (1-based)
+        chapter_info: ChapterInfo dict with title and text
+        output_dir: Output directory for chapter files
+        podcast_req: Full podcast request with TTS/audio options
+        tts_client: Shared TTS client
+        audio_processor: Shared audio processor
+        cover_image_path: Optional cover image
+
+    Returns:
+        dict with filename, file_path, file_size, duration_seconds
+    """
+    chapter_num = chapter_index + 1
+    chapter_title = chapter_info['title']
+    chapter_text = chapter_info['text']
+
+    logger.info(f"[{job_id}] ⏳ Chapter {chapter_num}: {chapter_title} ({len(chapter_text)} chars)")
+
+    # Create temp directory for this chapter
+    chapter_temp_dir = Path(settings.temp_dir) / job_id / f"chapter_{chapter_num}"
+    chapter_temp_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir = chapter_temp_dir / "chunks"
+    chunks_dir.mkdir(exist_ok=True)
+
+    try:
+        # Step 1: Chunk chapter text
+        chunker = TextChunker(
+            max_chunk_size=podcast_req.tts_options.chunk_size,
+            preserve_sentence=podcast_req.tts_options.preserve_sentence,
+            remove_urls=podcast_req.tts_options.remove_urls,
+            remove_markdown=podcast_req.tts_options.remove_markdown,
+        )
+
+        chunks = chunker.create_chunks(
+            text=chapter_text,
+            add_chapter_markers=False  # No chapter markers within chapters
+        )
+
+        if not chunks:
+            raise PodcastProcessingError(f"Chapter {chapter_num} generated no text chunks")
+
+        logger.info(f"[{job_id}]  └─ Generated {len(chunks)} chunks for chapter {chapter_num}")
+
+        # Step 2: TTS synthesis
+        tts_results = await _synthesize_with_retry(
+            tts_client=tts_client,
+            chunks=chunks,
+            chunks_dir=chunks_dir,
+            voice=podcast_req.tts_options.voice,
+            speed=podcast_req.tts_options.speed,
+            max_parallel=podcast_req.processing_options.max_parallel_tts,
+            pause_between=podcast_req.tts_options.pause_between_chunks,
+        )
+
+        # Get successful audio files
+        audio_files = [r[1] for r in tts_results if r[2]]
+        failed_chunks = [r for r in tts_results if not r[2]]
+
+        if failed_chunks:
+            logger.warning(f"[{job_id}]  └─ {len(failed_chunks)}/{len(chunks)} chunks failed for chapter {chapter_num}")
+
+        if not audio_files:
+            raise PodcastProcessingError(f"Chapter {chapter_num} generated no audio")
+
+        # Step 3: Merge audio files for this chapter
+        # Sanitize chapter title for filename (remove special chars)
+        safe_title = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '' for c in chapter_title)
+        safe_title = safe_title.replace(' ', '-').lower()[:50]  # Max 50 chars
+
+        chapter_filename = f"{chapter_num:02d}-{safe_title}.m4a"
+        chapter_output_path = output_dir / chapter_filename
+
+        merged_audio = await audio_processor.merge_audio_files(
+            input_files=audio_files,
+            output_path=chapter_output_path,
+            format="m4a",  # Always M4A for chapters
+            bitrate=podcast_req.audio_options.bitrate,
+            sample_rate=podcast_req.audio_options.sample_rate,
+            channels=podcast_req.audio_options.channels,
+            add_silence_start=podcast_req.audio_options.add_silence_start,
+            add_silence_end=podcast_req.audio_options.add_silence_end,
+        )
+
+        # Step 4: Embed metadata for this chapter
+        audio_processor.embed_metadata(
+            audio_path=merged_audio,
+            title=f"{chapter_num}. {chapter_title}",  # "1. Introduction"
+            author=podcast_req.metadata.author,
+            description=f"Chapter {chapter_num} of {podcast_req.metadata.title}",
+            album=podcast_req.metadata.title,  # Audiobook title as album
+            genre=podcast_req.metadata.genre,
+            narrator=podcast_req.metadata.narrator,
+            publisher=podcast_req.metadata.publisher,
+            copyright=podcast_req.metadata.copyright,
+            publication_date=podcast_req.metadata.publication_date,
+            cover_image_path=cover_image_path,
+            track_number=chapter_num,  # Chapter number as track number
+        )
+
+        # Step 5: Get duration
+        duration = await audio_processor.get_audio_duration(merged_audio)
+
+        logger.success(f"[{job_id}] ✓ Chapter {chapter_num}: {chapter_filename} ({merged_audio.stat().st_size / 1024 / 1024:.1f} MB, {duration:.1f}s)")
+
+        return {
+            "chapter_number": chapter_num,
+            "filename": chapter_filename,
+            "file_path": str(merged_audio),
+            "file_size": merged_audio.stat().st_size,
+            "duration_seconds": duration,
+            "chunks_processed": len(chunks),
+            "chunks_successful": len(audio_files),
+        }
+
+    finally:
+        # Cleanup chapter temp directory
+        import shutil
+        shutil.rmtree(chapter_temp_dir, ignore_errors=True)
+
+
+async def _process_multi_file_audiobook(
+    job_id: str,
+    podcast_req,
+    callback_url: str,
+    callbacks: dict,
+    start_time: float
+):
+    """
+    Process multi-file audiobook: PDF chapters → separate M4A files
+
+    Creates directory structure:
+    /data/shared/podcasts/final/{audiobook_title}/
+        01-chapter-one.m4a
+        02-chapter-two.m4a
+        ...
+
+    Args:
+        job_id: Job identifier
+        podcast_req: WebhookPodcastRequest with chapters
+        callback_url: Webhook callback URL
+        callbacks: Callback metadata
+        start_time: Job start timestamp
+    """
+    try:
+        # Create audiobook directory
+        audiobook_title_safe = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '' for c in podcast_req.metadata.title)
+        audiobook_title_safe = audiobook_title_safe.replace(' ', '-').lower()[:100]
+        audiobook_dir = Path(settings.final_dir) / audiobook_title_safe
+        audiobook_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"[{job_id}] 📁 Audiobook directory: {audiobook_dir}")
+
+        # Download cover image if provided
+        cover_image_path = None
+        if podcast_req.metadata.cover_image_url and podcast_req.audio_options.embed_cover:
+            job_dir = Path(settings.temp_dir) / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            cover_image_path = job_dir / "cover.jpg"
+            audio_processor = AudioProcessor()
+            cover_image_path = await audio_processor.download_cover_image(
+                str(podcast_req.metadata.cover_image_url),
+                cover_image_path
+            )
+            logger.info(f"[{job_id}] 📷 Cover image downloaded")
+
+        # Initialize shared TTS client and audio processor
+        tts_client = KokoroTTSClient()
+        audio_processor = AudioProcessor()
+
+        try:
+            # Process each chapter sequentially
+            chapter_results = []
+            total_chapters = len(podcast_req.chapters)
+
+            for idx, chapter in enumerate(podcast_req.chapters):
+                # Update progress
+                progress_percent = int(10 + (idx / total_chapters) * 80)  # 10-90%
+                update_job_progress(
+                    job_id,
+                    current_step=2,
+                    step_name=f"Processing chapter {idx+1}/{total_chapters}",
+                    progress_percent=progress_percent
+                )
+
+                # Process chapter
+                chapter_result = await _process_chapter_to_audio(
+                    job_id=job_id,
+                    chapter_index=idx,
+                    chapter_info=chapter.model_dump() if hasattr(chapter, 'model_dump') else chapter,
+                    output_dir=audiobook_dir,
+                    podcast_req=podcast_req,
+                    tts_client=tts_client,
+                    audio_processor=audio_processor,
+                    cover_image_path=cover_image_path
+                )
+                chapter_results.append(chapter_result)
+
+        finally:
+            # Always close TTS client
+            await tts_client.close()
+
+        # Calculate aggregate statistics
+        total_duration = sum(ch['duration_seconds'] for ch in chapter_results)
+        total_size = sum(ch['file_size'] for ch in chapter_results)
+        total_chunks = sum(ch['chunks_processed'] for ch in chapter_results)
+        successful_chunks = sum(ch['chunks_successful'] for ch in chapter_results)
+        processing_time = time.time() - start_time
+
+        logger.success(f"[{job_id}] 🎉 Multi-file audiobook complete!")
+        logger.info(f"[{job_id}]  └─ {len(chapter_results)} chapters → {audiobook_dir}")
+        logger.info(f"[{job_id}]  └─ Total duration: {total_duration/60:.1f} min")
+        logger.info(f"[{job_id}]  └─ Total size: {total_size/1024/1024:.1f} MB")
+        logger.info(f"[{job_id}]  └─ Processing time: {processing_time:.1f}s")
+
+        # Update progress to 100%
+        update_job_progress(job_id, 6, "Complete", 100)
+
+        # Build response data
+        stats = ProcessingStats(
+            total_chunks=total_chunks,
+            successful_chunks=successful_chunks,
+            failed_chunks=total_chunks - successful_chunks,
+            total_duration_seconds=total_duration,
+            processing_time_seconds=processing_time,
+            tts_api_calls=total_chunks,
+            average_chunk_time=processing_time / total_chunks if total_chunks else 0,
+            text_length_chars=sum(len(ch.text) for ch in podcast_req.chapters),
+            text_length_words=sum(len(ch.text.split()) for ch in podcast_req.chapters),
+            estimated_listening_time_minutes=total_duration / 60,
+        )
+
+        podcast_data = {
+            "audiobook_title": podcast_req.metadata.title,
+            "audiobook_directory": str(audiobook_dir),
+            "total_chapters": len(chapter_results),
+            "chapters": chapter_results,
+            "total_duration_seconds": total_duration,
+            "total_size_bytes": total_size,
+            "format": "m4a",  # Multi-file always uses M4A
+        }
+
+        # Send webhook callback on success
+        if callback_url:
+            logger.info(f"[{job_id}] 📡 Sending webhook callback...")
+            await send_webhook_callback_with_retry(
+                callback_url=str(callback_url),
+                job_id=job_id,
+                success=True,
+                podcast_data=podcast_data,
+                processing_stats=stats,
+                callbacks=callbacks
+            )
+            logger.success(f"[{job_id}] ✓ Webhook callback sent")
+
+        # Cleanup temp files
+        job_dir = Path(settings.temp_dir) / job_id
+        if job_dir.exists():
+            import shutil
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.exception(f"[{job_id}] Multi-file processing failed")
+
+        # Cleanup on error
+        try:
+            if podcast_req.processing_options.cleanup_on_error:
+                import shutil
+                # Cleanup temp directory
+                job_dir = Path(settings.temp_dir) / job_id
+                if job_dir.exists():
+                    shutil.rmtree(job_dir, ignore_errors=True)
+                # DO NOT delete audiobook_dir - partial chapters may be useful
+        except Exception as cleanup_error:
+            logger.error(f"[{job_id}] Cleanup failed: {cleanup_error}")
+
+        # Send error callback
+        if callback_url:
+            try:
+                logger.info(f"[{job_id}] 📡 Sending error webhook callback...")
+                await send_webhook_callback_with_retry(
+                    callback_url=str(callback_url),
+                    job_id=job_id,
+                    success=False,
+                    error=f"{type(e).__name__}: {str(e)}",
+                    callbacks=callbacks
+                )
+            except Exception as callback_error:
+                logger.error(f"[{job_id}] Failed to send error callback: {callback_error}")
+
+        # Re-raise to mark RQ job as failed
+        raise
+
+
 async def _process_podcast_job_async(
     job_id: str,
     podcast_req_dict: Dict[str, Any],
@@ -246,6 +553,10 @@ async def _process_podcast_job_async(
 ):
     """
     Async podcast processing logic (moved from main.py)
+
+    Supports two modes:
+    - Single-file mode: Standard text → single M4B (existing behavior)
+    - Multi-file mode: PDF chapters → separate M4A files per chapter (Phase 4)
     """
     start_time = time.time()
 
@@ -261,6 +572,22 @@ async def _process_podcast_job_async(
         job.save_meta()
     except Exception as e:
         logger.warning(f"[{job_id}] Failed to store title in job meta: {e}")
+
+    # ============================================================================
+    # MODE DETECTION: Multi-file (chapters) vs Single-file (text)
+    # ============================================================================
+    if podcast_req.chapters and len(podcast_req.chapters) > 0:
+        # ========================================================================
+        # MULTI-FILE MODE: Process each chapter as separate M4A file
+        # ========================================================================
+        logger.info(f"[{job_id}] 📚 Multi-file mode: {len(podcast_req.chapters)} chapters detected")
+        await _process_multi_file_audiobook(job_id, podcast_req, callback_url, callbacks, start_time)
+        return  # Exit after multi-file processing
+
+    # ============================================================================
+    # SINGLE-FILE MODE: Standard text-to-podcast pipeline (existing behavior)
+    # ============================================================================
+    logger.info(f"[{job_id}] 📄 Single-file mode: Standard text-to-podcast")
 
     try:
         # Create job directory
