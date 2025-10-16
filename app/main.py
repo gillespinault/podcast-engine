@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks, File, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -25,15 +25,24 @@ from app.api.models import (
     JobStatusResponse,
     JobListResponse,
     JobProgress,
+    PodcastMetadata,
+    TTSOptions,
+    AudioOptions,
+    ProcessingOptions,
 )
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
+from app.core.pdf_processor import DoclingPDFProcessor, validate_pdf, PDFValidationError
+from app.llm.gemini import GeminiClient
+from app.llm.voice_selector import select_voice
 from app.worker import enqueue_podcast_job, redis_conn, podcast_queue  # RQ job queue
 from rq.job import Job
 from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry, DeferredJobRegistry
 import httpx
 import asyncio
+import json
+import tempfile
 
 
 # Application startup/shutdown
@@ -314,12 +323,34 @@ async def get_job_status(job_id: str):
 
 
 @app.post("/api/v1/create-podcast", response_model=PodcastResponse, tags=["Podcast"])
-async def create_podcast(request: Request, podcast_req: PodcastRequest):
+async def create_podcast(
+    request: Request,
+    # Text mode: JSON body with PodcastRequest
+    podcast_req: PodcastRequest = None,
+    # PDF mode: multipart/form-data
+    pdf_file: UploadFile = File(default=None),
+    metadata_json: str = Form(default=None),
+    tts_options_json: str = Form(default=None),
+    audio_options_json: str = Form(default=None),
+    processing_options_json: str = Form(default=None),
+):
     """
-    Create podcast from text
+    Create podcast from text OR PDF
 
-    This endpoint converts text to a professional podcast/audiobook using:
-    1. Smart text chunking (sentence-aware)
+    This endpoint supports two input modes:
+
+    **Text Mode** (application/json):
+    - Provide `podcast_req` JSON with `text` field
+
+    **PDF Mode** (multipart/form-data):
+    - Upload `pdf_file` (PDF document)
+    - Provide `metadata_json`, `tts_options_json`, `audio_options_json`, `processing_options_json`
+    - PDF is processed with Docling (OCR support)
+    - Gemini analyzes document, detects language, and creates chapters
+    - Voice is auto-selected based on detected language
+
+    Processing steps:
+    1. Smart text chunking (sentence-aware) OR PDF extraction + chaptering
     2. Parallel TTS synthesis (Kokoro)
     3. ffmpeg audio merge
     4. Metadata embedding
@@ -330,6 +361,112 @@ async def create_podcast(request: Request, podcast_req: PodcastRequest):
     start_time = time.time()
     job_id = str(uuid.uuid4())
 
+    # ============================================================================
+    # Mode Detection: Text (JSON) vs PDF (multipart/form-data)
+    # ============================================================================
+    if pdf_file:
+        # ========================================================================
+        # PDF MODE: Extract text from PDF, analyze with Gemini, auto-select voice
+        # ========================================================================
+        logger.info(f"[{job_id}] PDF mode: processing {pdf_file.filename}")
+
+        try:
+            # Parse JSON options from form data
+            metadata = PodcastMetadata(**json.loads(metadata_json)) if metadata_json else PodcastMetadata(title=pdf_file.filename.replace('.pdf', ''))
+            tts_options = TTSOptions(**json.loads(tts_options_json)) if tts_options_json else TTSOptions()
+            audio_options = AudioOptions(**json.loads(audio_options_json)) if audio_options_json else AudioOptions()
+            processing_options = ProcessingOptions(**json.loads(processing_options_json)) if processing_options_json else ProcessingOptions()
+
+            # Save uploaded PDF to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                tmp_pdf_path = Path(tmp_pdf.name)
+                content = await pdf_file.read()
+                tmp_pdf.write(content)
+                tmp_pdf.flush()
+
+            logger.info(f"[{job_id}] PDF saved to {tmp_pdf_path} ({len(content)} bytes)")
+
+            # Step 1: Validate PDF
+            logger.info(f"[{job_id}] Step 1: Validating PDF")
+            try:
+                validate_pdf(tmp_pdf_path)
+            except PDFValidationError as e:
+                tmp_pdf_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail=str(e))
+
+            # Step 2: Extract text and images with Docling
+            logger.info(f"[{job_id}] Step 2: Extracting text with Docling (OCR enabled)")
+            try:
+                pdf_processor = DoclingPDFProcessor()
+                extraction_result = pdf_processor.extract_text_and_images(tmp_pdf_path)
+                logger.info(f"[{job_id}] Extracted {len(extraction_result['text'])} chars, {extraction_result['pages']} pages, {len(extraction_result['images'])} images")
+            except Exception as e:
+                tmp_pdf_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
+            finally:
+                # Clean up temporary PDF
+                tmp_pdf_path.unlink(missing_ok=True)
+
+            # Step 3: Analyze with Gemini (language detection + chaptering)
+            logger.info(f"[{job_id}] Step 3: Analyzing document with Gemini (language detection + chaptering)")
+            try:
+                gemini_client = GeminiClient()
+                analysis_result = gemini_client.analyze_document(
+                    text=extraction_result['text'],
+                    images_metadata=extraction_result['images'],
+                    metadata_hint=extraction_result['metadata']
+                )
+                detected_language = analysis_result['language']
+                chapters = analysis_result['chapters']
+                logger.info(f"[{job_id}] Gemini detected language: {detected_language}, chapters: {len(chapters)}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Gemini analysis failed: {str(e)}")
+
+            # Step 4: Auto-select voice based on detected language
+            selected_voice = select_voice(
+                language=detected_language,
+                gender=tts_options.voice.split('_')[0][1] if tts_options.voice != "af_bella" else "female",  # Extract gender from voice ID
+                override=None  # No manual override
+            )
+            logger.info(f"[{job_id}] Auto-selected voice: {selected_voice} (language={detected_language})")
+            tts_options.voice = selected_voice
+
+            # Step 5: Concatenate chapters into single text (for now, Phase 4 will handle multi-file)
+            full_text = "\n\n".join([f"# {ch['title']}\n\n{ch['text']}" for ch in chapters])
+            logger.info(f"[{job_id}] Concatenated {len(chapters)} chapters into {len(full_text)} characters")
+
+            # Update metadata with detected language
+            metadata.language = detected_language
+
+            # Build PodcastRequest for standard pipeline
+            podcast_req = PodcastRequest(
+                text=full_text,
+                metadata=metadata,
+                tts_options=tts_options,
+                audio_options=audio_options,
+                processing_options=processing_options
+            )
+
+            logger.info(f"[{job_id}] PDF pipeline complete, proceeding to TTS synthesis")
+
+        except HTTPException:
+            raise
+        except json.JSONDecodeError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON in form data: {str(e)}")
+        except Exception as e:
+            logger.exception(f"[{job_id}] PDF mode failed: {e}")
+            raise HTTPException(status_code=500, detail=f"PDF processing failed: {str(e)}")
+
+    elif podcast_req is None:
+        # Neither PDF nor text provided
+        raise HTTPException(
+            status_code=400,
+            detail="Either provide 'pdf_file' (multipart/form-data) OR JSON body with 'text' field"
+        )
+
+    # ============================================================================
+    # TEXT MODE: Standard text-to-podcast pipeline (existing logic)
+    # ============================================================================
     logger.info(f"[{job_id}] New podcast request: {podcast_req.metadata.title}")
 
     try:
