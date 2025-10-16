@@ -462,6 +462,48 @@ async def create_podcast(
 
             logger.info(f"[{job_id}] PDF pipeline complete, proceeding to multi-file TTS synthesis ({len(chapters)} chapters)")
 
+            # ========================================================================
+            # PDF MODE: Check async_mode and enqueue job or continue sync
+            # ========================================================================
+            if processing_options.async_mode:
+                logger.info(f"[{job_id}] Async mode enabled for PDF - enqueuing job in Redis Queue")
+
+                # Validate callback_url for async mode (optional for GUI - will use polling instead)
+                callback_url = processing_options.callback_url
+                if not callback_url:
+                    # GUI doesn't provide callback_url, it will poll /api/v1/jobs instead
+                    logger.info(f"[{job_id}] No callback_url provided - GUI will poll for results")
+
+                # Enqueue job in Redis Queue (persistent, retryable)
+                try:
+                    rq_job = enqueue_podcast_job(
+                        job_id=job_id,
+                        podcast_req=podcast_req,
+                        callback_url=str(callback_url) if callback_url else None
+                    )
+                    logger.info(f"[{job_id}] RQ Job enqueued: {rq_job.get_status()}")
+                except Exception as e:
+                    logger.error(f"[{job_id}] Failed to enqueue job: {e}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to enqueue job: {str(e)}"
+                    )
+
+                # Return immediately with job_id (GUI will poll /api/v1/jobs/{job_id})
+                return PodcastResponse(
+                    success=True,
+                    job_id=job_id,
+                    podcast=None,  # Will be available when job completes
+                    processing=None,
+                    message=f"Job {job_id} enqueued in Redis Queue. Use /api/v1/jobs/{job_id} to check status."
+                )
+            else:
+                # Sync mode for PDF not yet supported (requires multi-file worker logic)
+                raise HTTPException(
+                    status_code=501,
+                    detail="PDF processing requires async_mode=true. Please enable async mode."
+                )
+
         except HTTPException:
             raise
         except json.JSONDecodeError as e:
