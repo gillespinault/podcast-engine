@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import logging
 import os
-from pypdf import PdfReader
+try:
+    from pypdf import PdfReader  # pypdf 3.x+ (modern)
+except ImportError:
+    from PyPDF2 import PdfReader  # Fallback for PyPDF2 (legacy)
 
 logger = logging.getLogger(__name__)
 
