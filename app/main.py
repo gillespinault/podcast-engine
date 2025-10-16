@@ -33,7 +33,7 @@ from app.api.models import (
 from app.core.chunking import TextChunker
 from app.core.tts import KokoroTTSClient
 from app.core.audio import AudioProcessor
-from app.core.pdf_processor import DoclingPDFProcessor, validate_pdf, PDFValidationError
+from app.core.pdf_processor import SimplePDFProcessor, validate_pdf, extract_cover, PDFValidationError
 from app.llm.gemini import GeminiClient
 from app.llm.voice_selector import select_voice
 from app.worker import enqueue_podcast_job, redis_conn, podcast_queue  # RQ job queue
@@ -255,16 +255,27 @@ async def extract_metadata(
                 # Validate PDF
                 validate_pdf(tmp_pdf_path)
 
-                # Extract text with Docling
-                pdf_processor = DoclingPDFProcessor()
-                extraction_result = pdf_processor.extract_text_and_images(tmp_pdf_path)
-                extracted_text = extraction_result['text']
+                # Upload PDF to Gemini File API and extract metadata
+                logger.info(f"Uploading PDF to Gemini File API for metadata extraction")
+                gemini_client = GeminiClient()
 
-                logger.info(f"Extracted {len(extracted_text)} chars from PDF for metadata analysis")
+                # Upload PDF file
+                uploaded_file = gemini_client.upload_pdf_file(tmp_pdf_path, pdf_file.filename)
 
-                # Use filename from upload if not provided
-                if not filename:
-                    filename = pdf_file.filename
+                # Extract metadata directly from PDF (without downloading text)
+                metadata_result = gemini_client.extract_metadata_from_pdf(
+                    pdf_file=uploaded_file,
+                    filename=pdf_file.filename,
+                    source_url=source_url
+                )
+
+                logger.info(
+                    f"Metadata extracted from PDF via Gemini: title='{metadata_result['title']}', "
+                    f"author='{metadata_result['author']}', language={metadata_result['language']}"
+                )
+
+                # Return metadata immediately (no need to extract text)
+                return metadata_result
 
             except PDFValidationError as e:
                 tmp_pdf_path.unlink(missing_ok=True)
@@ -481,9 +492,10 @@ async def create_podcast(
     **PDF Mode** (multipart/form-data):
     - Upload `pdf_file` (PDF document)
     - Provide `metadata_json`, `tts_options_json`, `audio_options_json`, `processing_options_json`
-    - PDF is processed with Docling (OCR support)
+    - PDF is uploaded to Gemini File API (native PDF processing with OCR)
     - Gemini analyzes document, detects language, and creates chapters
     - Voice is auto-selected based on detected language
+    - Cover extraction handled separately with pypdf
 
     Processing steps:
     1. Smart text chunking (sentence-aware) OR PDF extraction + chaptering
@@ -530,17 +542,19 @@ async def create_podcast(
                 tmp_pdf_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=400, detail=str(e))
 
-            # Step 2: Extract text and images with Docling
-            logger.info(f"[{job_id}] Step 2: Extracting text with Docling (OCR enabled)")
+            # Step 2: Upload PDF to Gemini File API
+            logger.info(f"[{job_id}] Step 2: Uploading PDF to Gemini File API")
             try:
-                pdf_processor = DoclingPDFProcessor()
-                extraction_result = pdf_processor.extract_text_and_images(tmp_pdf_path)
-                logger.info(f"[{job_id}] Extracted {len(extraction_result['text'])} chars, {extraction_result['pages']} pages, {len(extraction_result['images'])} images")
+                gemini_client = GeminiClient()
+                uploaded_file = gemini_client.upload_pdf_file(tmp_pdf_path, pdf_file.filename)
+                logger.info(f"[{job_id}] PDF uploaded successfully to Gemini (URI: {uploaded_file.uri})")
 
-                # Handle extracted cover image
-                if extraction_result.get('cover_image_path'):
-                    cover_path = Path(extraction_result['cover_image_path'])
-                    if cover_path.exists():
+                # Extract cover image (optional, parallel to Gemini processing)
+                try:
+                    pdf_processor = SimplePDFProcessor()
+                    cover_path = pdf_processor.extract_cover_image(tmp_pdf_path)
+
+                    if cover_path and cover_path.exists():
                         # Copy cover to shared storage for worker access
                         cover_storage_dir = Path(settings.storage_base_path) / "covers"
                         cover_storage_dir.mkdir(parents=True, exist_ok=True)
@@ -552,25 +566,36 @@ async def create_podcast(
 
                         # Store local path in metadata (worker will handle local files)
                         metadata.cover_image_url = f"file://{cover_dest}"
+
+                        # Clean up temporary cover
+                        cover_path.unlink(missing_ok=True)
                     else:
-                        logger.warning(f"[{job_id}] Cover image path exists in result but file not found: {cover_path}")
-                else:
-                    logger.info(f"[{job_id}] No cover image found in PDF")
+                        logger.info(f"[{job_id}] No cover image found in PDF")
+                except Exception as e:
+                    # Cover extraction is optional - don't fail if it doesn't work
+                    logger.warning(f"[{job_id}] Cover extraction failed (non-fatal): {e}")
+
             except Exception as e:
                 tmp_pdf_path.unlink(missing_ok=True)
-                raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"PDF upload failed: {str(e)}")
             finally:
                 # Clean up temporary PDF
                 tmp_pdf_path.unlink(missing_ok=True)
 
-            # Step 3: Analyze with Gemini (language detection + chaptering)
-            logger.info(f"[{job_id}] Step 3: Analyzing document with Gemini (language detection + chaptering)")
+            # Step 3: Analyze PDF with Gemini (language detection + chaptering via File API)
+            logger.info(f"[{job_id}] Step 3: Analyzing PDF document with Gemini File API")
             try:
-                gemini_client = GeminiClient()
-                analysis_result = gemini_client.analyze_document(
-                    text=extraction_result['text'],
-                    images_metadata=extraction_result['images'],
-                    metadata_hint=extraction_result['metadata']
+                # Build metadata hint from form data
+                metadata_hint = {
+                    'title': metadata.title,
+                    'author': metadata.author,
+                    'filename': pdf_file.filename
+                }
+
+                # Analyze PDF directly (Gemini reads PDF natively - no text extraction needed)
+                analysis_result = gemini_client.analyze_pdf_document(
+                    pdf_file=uploaded_file,
+                    metadata_hint=metadata_hint
                 )
                 detected_language = analysis_result['language']
                 chapters = analysis_result['chapters']
