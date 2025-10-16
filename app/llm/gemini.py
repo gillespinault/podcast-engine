@@ -2,9 +2,10 @@
 Gemini API Client for Document Analysis
 Handles chapter detection, language detection, and audio-friendly reformatting
 Uses Gemini File API for direct PDF processing (no Docling dependency)
+Migrated to google-genai SDK (unified, GA, stable)
 """
 
-import google.generativeai as genai
+from google import genai
 from typing import List, Dict, Optional
 import os
 import json
@@ -40,17 +41,16 @@ class GeminiClient:
                 "GEMINI_API_KEY not set. Please configure in environment variables."
             )
 
-        genai.configure(api_key=api_key)
+        # Initialize central client (new google-genai SDK)
+        self.client = genai.Client(api_key=api_key)
 
         # Main model for heavy analysis (PDF processing, chaptering)
-        main_model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
-        self.model = genai.GenerativeModel(main_model_name)
+        self.main_model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 
         # Fast model for quick metadata extraction (autofill)
-        flash_model_name = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.0-flash-exp")
-        self.flash_model = genai.GenerativeModel(flash_model_name)
+        self.flash_model_name = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.0-flash-exp")
 
-        logger.info(f"Gemini client initialized (main: {main_model_name}, flash: {flash_model_name})")
+        logger.info(f"Gemini client initialized (main: {self.main_model_name}, flash: {self.flash_model_name})")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -99,7 +99,10 @@ class GeminiClient:
         )
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.main_model_name,
+                contents=prompt
+            )
             logger.info("Gemini analysis complete, parsing response")
 
             # Try to parse JSON response
@@ -369,7 +372,10 @@ Text sample:
 Return format: Just the 2-letter code, nothing else.
 """
             try:
-                response = self.model.generate_content(prompt)
+                response = self.client.models.generate_content(
+                    model=self.main_model_name,
+                    contents=prompt
+                )
                 lang = response.text.strip().lower()[:2]
                 logger.info(f"Language detected via Gemini fallback: {lang}")
                 return lang
@@ -493,7 +499,10 @@ You are an expert at analyzing documents and extracting metadata.
         logger.info(f"Sending text to Gemini Flash for metadata extraction (text_length={len(text_sample)})")
 
         try:
-            response = self.flash_model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.flash_model_name,
+                contents=prompt
+            )
             logger.info("Gemini Flash metadata extraction complete, parsing response")
 
             # Try to parse JSON response
@@ -554,10 +563,9 @@ You are an expert at analyzing documents and extracting metadata.
         logger.info(f"Uploading PDF to Gemini File API: {pdf_path.name} ({file_size_mb:.1f} MB)")
 
         try:
-            # Upload file
-            uploaded_file = genai.upload_file(
-                path=str(pdf_path),
-                display_name=display_name or pdf_path.name
+            # Upload file (new google-genai SDK)
+            uploaded_file = self.client.files.upload(
+                file=str(pdf_path)
             )
 
             logger.info(f"PDF uploaded successfully: {uploaded_file.name} (URI: {uploaded_file.uri})")
@@ -566,7 +574,7 @@ You are an expert at analyzing documents and extracting metadata.
             while uploaded_file.state.name == "PROCESSING":
                 logger.debug(f"Waiting for file processing... (state: {uploaded_file.state.name})")
                 time.sleep(2)
-                uploaded_file = genai.get_file(uploaded_file.name)
+                uploaded_file = self.client.files.get(name=uploaded_file.name)
 
             if uploaded_file.state.name != "ACTIVE":
                 raise Exception(f"File processing failed: {uploaded_file.state.name}")
@@ -621,7 +629,10 @@ You are an expert at analyzing documents and extracting metadata.
 
         try:
             # Generate content with PDF file
-            response = self.model.generate_content([pdf_file, prompt])
+            response = self.client.models.generate_content(
+                model=self.main_model_name,
+                contents=[pdf_file, prompt]
+            )
             logger.info("Gemini PDF analysis complete, parsing response")
 
             # Parse JSON response
@@ -831,7 +842,10 @@ You are an expert at analyzing documents and extracting metadata.
         logger.info(f"Sending PDF to Gemini Flash for metadata extraction (file: {pdf_file.name})")
 
         try:
-            response = self.flash_model.generate_content([pdf_file, prompt])
+            response = self.client.models.generate_content(
+                model=self.flash_model_name,
+                contents=[pdf_file, prompt]
+            )
             logger.info("Gemini Flash PDF metadata extraction complete, parsing response")
 
             # Parse JSON response

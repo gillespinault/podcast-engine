@@ -5,7 +5,7 @@ uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 
 # HTTP client for async requests
-httpx==0.27.2
+httpx==0.28.1           # Upgraded for google-genai compatibility (requires >=0.28.1)
 aiofiles==24.1.0
 
 # Audio processing
@@ -16,7 +16,7 @@ pypdf==5.1.0             # PDF library (cover image extraction)
 Pillow==11.0.0           # Image processing (cover extraction)
 
 # LLM integration (Gemini API for chaptering + language detection)
-google-generativeai==0.8.5  # Google Gemini API (legacy SDK, upgrade to fix ragStoreName error)
+google-genai==1.45.0        # Google Gen AI SDK (unified, GA, stable - migrated from legacy google-generativeai)
 langdetect==1.0.9           # Fallback language detection
 json-repair==0.34.0         # Fix malformed JSON from LLM responses
 
