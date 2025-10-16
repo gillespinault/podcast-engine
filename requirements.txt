@@ -13,8 +13,9 @@ mutagen==1.47.0          # Audio metadata (M4B tags)
 
 # PDF text extraction with OCR support (Docling)
 docling==2.9.0           # IBM Docling - PDF extraction + OCR (stable version)
-pypdf==5.1.0             # PDF library (for validation) - Fixed: pypdf not pypdf2 for v3+
+pypdf==5.1.0             # PDF library (for validation + image extraction)
 pdfplumber==0.11.4       # Backup PDF library (for validation)
+Pillow==11.0.0           # Image processing (cover extraction)
 
 # LLM integration (Gemini API for chaptering + language detection)
 google-generativeai==0.8.3  # Google Gemini API
