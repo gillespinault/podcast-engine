@@ -399,6 +399,26 @@ async def create_podcast(
                 pdf_processor = DoclingPDFProcessor()
                 extraction_result = pdf_processor.extract_text_and_images(tmp_pdf_path)
                 logger.info(f"[{job_id}] Extracted {len(extraction_result['text'])} chars, {extraction_result['pages']} pages, {len(extraction_result['images'])} images")
+
+                # Handle extracted cover image
+                if extraction_result.get('cover_image_path'):
+                    cover_path = Path(extraction_result['cover_image_path'])
+                    if cover_path.exists():
+                        # Copy cover to shared storage for worker access
+                        cover_storage_dir = Path(settings.storage_base_path) / "covers"
+                        cover_storage_dir.mkdir(parents=True, exist_ok=True)
+                        cover_dest = cover_storage_dir / f"{job_id}_cover.jpg"
+
+                        import shutil
+                        shutil.copy2(cover_path, cover_dest)
+                        logger.info(f"[{job_id}] 📷 PDF cover extracted and saved to {cover_dest}")
+
+                        # Store local path in metadata (worker will handle local files)
+                        metadata.cover_image_url = f"file://{cover_dest}"
+                    else:
+                        logger.warning(f"[{job_id}] Cover image path exists in result but file not found: {cover_path}")
+                else:
+                    logger.info(f"[{job_id}] No cover image found in PDF")
             except Exception as e:
                 tmp_pdf_path.unlink(missing_ok=True)
                 raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")

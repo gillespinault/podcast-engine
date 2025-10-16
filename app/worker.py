@@ -404,18 +404,33 @@ async def _process_multi_file_audiobook(
 
         logger.info(f"[{job_id}] 📁 Audiobook directory: {audiobook_dir}")
 
-        # Download cover image if provided
+        # Download cover image if provided (or copy from local file)
         cover_image_path = None
         if podcast_req.metadata.cover_image_url and podcast_req.audio_options.embed_cover:
             job_dir = Path(settings.temp_dir) / job_id
             job_dir.mkdir(parents=True, exist_ok=True)
             cover_image_path = job_dir / "cover.jpg"
-            audio_processor = AudioProcessor()
-            cover_image_path = await audio_processor.download_cover_image(
-                str(podcast_req.metadata.cover_image_url),
-                cover_image_path
-            )
-            logger.info(f"[{job_id}] 📷 Cover image downloaded")
+
+            cover_url = str(podcast_req.metadata.cover_image_url)
+
+            # Handle local file:// URLs (from PDF extraction)
+            if cover_url.startswith("file://"):
+                import shutil
+                source_path = Path(cover_url.replace("file://", ""))
+                if source_path.exists():
+                    shutil.copy2(source_path, cover_image_path)
+                    logger.info(f"[{job_id}] 📷 Cover image copied from local file: {source_path}")
+                else:
+                    logger.warning(f"[{job_id}] Local cover file not found: {source_path}")
+                    cover_image_path = None
+            else:
+                # HTTP/HTTPS URL - download normally
+                audio_processor = AudioProcessor()
+                cover_image_path = await audio_processor.download_cover_image(
+                    cover_url,
+                    cover_image_path
+                )
+                logger.info(f"[{job_id}] 📷 Cover image downloaded from URL")
 
         # Initialize shared TTS client and audio processor
         tts_client = KokoroTTSClient()
