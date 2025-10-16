@@ -11,9 +11,14 @@ aiofiles==24.1.0
 # Audio processing
 mutagen==1.47.0          # Audio metadata (M4B tags)
 
-# PDF text extraction (optional - for future PDF input support)
-pypdf2==3.0.1
-pdfplumber==0.11.4
+# PDF text extraction with OCR support (Docling)
+docling==2.9.1           # IBM Docling - PDF extraction + OCR
+pypdf2==3.0.1            # Backup PDF library (for validation)
+pdfplumber==0.11.4       # Backup PDF library (for validation)
+
+# LLM integration (Gemini API for chaptering + language detection)
+google-generativeai==0.8.3  # Google Gemini API
+langdetect==1.0.9           # Fallback language detection
 
 # Data validation and settings
 pydantic==2.9.2

@@ -13,6 +13,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     # PDF text extraction
     poppler-utils \
+    # OCR support (for scanned PDFs via Docling)
+    tesseract-ocr \
+    tesseract-ocr-fra \
+    tesseract-ocr-eng \
+    tesseract-ocr-spa \
+    tesseract-ocr-deu \
+    tesseract-ocr-ita \
+    tesseract-ocr-por \
+    tesseract-ocr-nld \
     # Utilities
     curl \
     wget \
@@ -24,7 +33,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Verify critical tools installation
 RUN ffmpeg -version && \
     pdftotext -v && \
-    echo "✅ System dependencies installed successfully"
+    tesseract --version && \
+    echo "✅ System dependencies installed successfully (ffmpeg, poppler-utils, tesseract)"
 
 # Copy requirements first (for Docker layer caching)
 COPY requirements.txt .
