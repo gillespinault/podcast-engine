@@ -526,7 +526,7 @@ You are an expert at analyzing documents and extracting metadata.
         wait=wait_exponential(multiplier=2, min=4, max=60),
         reraise=True
     )
-    def upload_pdf_file(self, pdf_path: Path, display_name: str = None) -> genai.File:
+    def upload_pdf_file(self, pdf_path: Path, display_name: str = None):
         """
         Upload PDF file to Gemini File API
 
@@ -578,7 +578,7 @@ You are an expert at analyzing documents and extracting metadata.
     )
     def analyze_pdf_document(
         self,
-        pdf_file: genai.File,
+        pdf_file,
         metadata_hint: Optional[Dict] = None
     ) -> Dict:
         """
@@ -743,8 +743,9 @@ NEVER artificially split articles or chapters to meet length targets.
     )
     def extract_metadata_from_pdf(
         self,
-        pdf_file: genai.File,
-        filename: str = None
+        pdf_file,
+        filename: str = None,
+        source_url: str = None
     ) -> Dict:
         """
         Extract metadata from PDF using Gemini File API (for autofill feature)
