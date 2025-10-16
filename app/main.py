@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Request, Header, File, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -38,7 +38,7 @@ from app.llm.gemini import GeminiClient
 from app.llm.voice_selector import select_voice
 from app.worker import enqueue_podcast_job, redis_conn, podcast_queue  # RQ job queue
 from rq.job import Job
-from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry, DeferredJobRegistry
+from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegistry
 import httpx
 import asyncio
 import json
@@ -248,7 +248,6 @@ async def list_jobs():
     started_registry = StartedJobRegistry(queue=podcast_queue)
     finished_registry = FinishedJobRegistry(queue=podcast_queue)
     failed_registry = FailedJobRegistry(queue=podcast_queue)
-    deferred_registry = DeferredJobRegistry(queue=podcast_queue)
 
     # Get job IDs from each registry
     queued_job_ids = podcast_queue.job_ids  # Jobs in queue

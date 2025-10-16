@@ -7,11 +7,10 @@ import asyncio
 from pathlib import Path
 from typing import Optional, List
 from loguru import logger
-import mutagen
 from mutagen.mp4 import MP4, MP4Cover
 from datetime import datetime
 
-from app.config import settings, AUDIO_FORMATS
+from app.config import AUDIO_FORMATS
 
 
 class AudioProcessor:
@@ -230,7 +229,7 @@ class AudioProcessor:
             # Save metadata
             audio.save()
 
-            logger.success(f"Metadata embedded successfully")
+            logger.success("Metadata embedded successfully")
 
         except Exception as e:
             logger.error(f"Failed to embed metadata: {e}")

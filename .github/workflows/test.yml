@@ -92,7 +92,7 @@ jobs:
         run: isort --check-only app/
 
       - name: Run Ruff (linter)
-        run: ruff check app/
+        run: ruff check app/ --ignore E501
 
       - name: Run mypy (type checking)
         continue-on-error: true

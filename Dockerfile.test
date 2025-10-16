@@ -1,0 +1,10 @@
+# Temporary Dockerfile for running tests locally
+FROM podcast-engine:test-local
+
+# Copy test files
+COPY tests/ /app/tests/
+COPY pytest.ini /app/
+COPY .coveragerc /app/
+
+# Run tests by default
+CMD ["pytest", "--cov=app", "--cov-report=term-missing", "--tb=short", "-v"]

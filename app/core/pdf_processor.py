@@ -7,7 +7,7 @@ from docling.document_converter import DocumentConverter
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict
 import logging
 import os
 try:

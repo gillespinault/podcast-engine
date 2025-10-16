@@ -4,7 +4,7 @@ Async client for Kokoro TTS API with retry logic
 """
 import asyncio
 import httpx
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from pathlib import Path
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type

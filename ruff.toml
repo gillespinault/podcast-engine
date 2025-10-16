@@ -1,0 +1,21 @@
+# Ruff configuration for Podcast Engine
+# Homelab-friendly linting: pragmatic over pedantic
+
+# Homelab-friendly linting: pragmatic over pedantic
+line-length = 120
+
+[lint]
+# Select rules: E (pycodestyle errors), F (pyflakes), W (pycodestyle warnings)
+select = ["E", "F", "W"]
+
+# Ignore rules
+ignore = [
+    "E501",  # Line too long (homelab: readability over strict line length)
+]
+
+[format]
+# Use double quotes
+quote-style = "double"
+
+# Indentation
+indent-style = "space"
