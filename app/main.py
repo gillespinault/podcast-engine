@@ -190,6 +190,143 @@ async def get_voices(request: Request, language: str = None):
         return all_voices
 
 
+@app.post("/api/v1/extract-metadata", tags=["Metadata"])
+async def extract_metadata(
+    request: Request,
+    # Text mode: JSON body with text field
+    text: str = None,
+    # PDF mode: multipart/form-data
+    pdf_file: UploadFile = File(default=None),
+    filename: str = Form(default=None),
+    source_url: str = Form(default=None),
+):
+    """
+    Extract metadata from content using Gemini LLM (autofill feature)
+
+    This endpoint supports two input modes:
+
+    **Text Mode** (application/json):
+    - Provide JSON body with `text` field
+
+    **PDF Mode** (multipart/form-data):
+    - Upload `pdf_file` (PDF document)
+    - Optionally provide `filename` and `source_url` hints
+
+    Uses Gemini AI to extract:
+    - Title (from content or filename)
+    - Author
+    - Language (ISO 639-1 code)
+    - Description (1-2 sentence summary)
+    - Genre
+    - Tags (3-7 keywords)
+    - Publication date (if available)
+    - Voice suggestion based on detected language
+
+    Returns:
+        {
+            "title": "Extracted title",
+            "author": "Author Name",
+            "language": "fr",
+            "description": "Brief summary...",
+            "genre": "Technology",
+            "tags": ["AI", "machine-learning", "education"],
+            "publication_date": "2025" or null,
+            "voice_suggestion": "ff_siwis"
+        }
+    """
+    try:
+        # ============================================================================
+        # Mode Detection: Text (JSON) vs PDF (multipart/form-data)
+        # ============================================================================
+        if pdf_file:
+            # ========================================================================
+            # PDF MODE: Extract text from PDF, then extract metadata
+            # ========================================================================
+            logger.info(f"Metadata extraction: PDF mode ({pdf_file.filename})")
+
+            # Save uploaded PDF to temporary file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_pdf:
+                tmp_pdf_path = Path(tmp_pdf.name)
+                content = await pdf_file.read()
+                tmp_pdf.write(content)
+                tmp_pdf.flush()
+
+            try:
+                # Validate PDF
+                validate_pdf(tmp_pdf_path)
+
+                # Extract text with Docling
+                pdf_processor = DoclingPDFProcessor()
+                extraction_result = pdf_processor.extract_text_and_images(tmp_pdf_path)
+                extracted_text = extraction_result['text']
+
+                logger.info(f"Extracted {len(extracted_text)} chars from PDF for metadata analysis")
+
+                # Use filename from upload if not provided
+                if not filename:
+                    filename = pdf_file.filename
+
+            except PDFValidationError as e:
+                tmp_pdf_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                tmp_pdf_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=500, detail=f"PDF extraction failed: {str(e)}")
+            finally:
+                # Clean up temporary PDF
+                tmp_pdf_path.unlink(missing_ok=True)
+
+        elif text:
+            # ========================================================================
+            # TEXT MODE: Use provided text directly
+            # ========================================================================
+            logger.info(f"Metadata extraction: Text mode ({len(text)} chars)")
+            extracted_text = text
+
+        else:
+            # Neither PDF nor text provided
+            raise HTTPException(
+                status_code=400,
+                detail="Either provide 'text' (JSON) OR 'pdf_file' (multipart/form-data)"
+            )
+
+        # ============================================================================
+        # Extract metadata using Gemini
+        # ============================================================================
+        try:
+            gemini_client = GeminiClient()
+            metadata_result = gemini_client.extract_metadata(
+                text=extracted_text,
+                filename=filename,
+                source_url=source_url
+            )
+
+            logger.info(
+                f"Metadata extracted: title='{metadata_result['title']}', "
+                f"author='{metadata_result['author']}', language={metadata_result['language']}"
+            )
+
+            return metadata_result
+
+        except ValueError as e:
+            # Gemini API key not configured
+            if "GEMINI_API_KEY" in str(e):
+                raise HTTPException(
+                    status_code=501,
+                    detail="Metadata extraction requires Gemini API key. Please configure GEMINI_API_KEY environment variable in Dokploy."
+                )
+            raise HTTPException(status_code=500, detail=f"Configuration error: {str(e)}")
+        except Exception as e:
+            logger.exception("Gemini metadata extraction failed")
+            raise HTTPException(status_code=500, detail=f"Gemini metadata extraction failed: {str(e)}")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Metadata extraction failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================================================
 # Job Status Endpoints (for GUI progress tracking)
 # ============================================================================
