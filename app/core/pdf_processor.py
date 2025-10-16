@@ -31,15 +31,20 @@ class DoclingPDFProcessor:
 
     def __init__(self):
         """Initialize Docling with OCR enabled"""
-        # Configure Docling pipeline
+        # Configure Docling pipeline options (Docling 2.9+ API)
         pipeline_options = PdfPipelineOptions()
         pipeline_options.do_ocr = True  # Enable OCR for scanned PDFs
         pipeline_options.do_table_structure = False  # Skip tables (not needed for audio)
 
         try:
+            # Docling 2.9+ uses format_options instead of pipeline_options
+            from docling.document_converter import PdfFormatOption
+
             self.converter = DocumentConverter(
                 allowed_formats=[InputFormat.PDF],
-                pipeline_options=pipeline_options
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+                }
             )
             logger.info("Docling PDF processor initialized (OCR enabled)")
         except Exception as e:
