@@ -418,7 +418,16 @@ async def create_podcast(
                 detected_language = analysis_result['language']
                 chapters = analysis_result['chapters']
                 logger.info(f"[{job_id}] Gemini detected language: {detected_language}, chapters: {len(chapters)}")
+            except ValueError as e:
+                # Gemini API key not configured
+                if "GEMINI_API_KEY" in str(e):
+                    raise HTTPException(
+                        status_code=501,
+                        detail="PDF processing requires Gemini API key. Please configure GEMINI_API_KEY environment variable in Dokploy."
+                    )
+                raise HTTPException(status_code=500, detail=f"Configuration error: {str(e)}")
             except Exception as e:
+                logger.exception(f"[{job_id}] Gemini analysis failed")
                 raise HTTPException(status_code=500, detail=f"Gemini analysis failed: {str(e)}")
 
             # Step 4: Auto-select voice based on detected language
