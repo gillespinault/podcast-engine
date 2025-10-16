@@ -235,6 +235,51 @@ class PiperTTSClient(BaseTTSClient):
             raise
 
 
+class KokoroTTSAdapter(BaseTTSClient):
+    """
+    Adapter for legacy KokoroTTSClient to work with multi-provider system.
+
+    Wraps the original KokoroTTSClient and adapts it to BaseTTSClient interface.
+    """
+
+    def __init__(self):
+        super().__init__(name="Kokoro TTS", timeout=settings.kokoro_timeout)
+        self._kokoro_client = None
+
+    async def initialize(self):
+        """Initialize Kokoro TTS client (lazy initialization)"""
+        from app.core.tts import KokoroTTSClient
+
+        self._kokoro_client = KokoroTTSClient(
+            api_url=str(settings.kokoro_tts_url),
+            timeout=settings.kokoro_timeout
+        )
+        logger.info(f"[{self.name}] Initialized with endpoint: {settings.kokoro_tts_url}")
+
+    async def close(self):
+        """Close Kokoro client"""
+        if self._kokoro_client:
+            await self._kokoro_client.close()
+
+    async def synthesize_chunk(
+        self,
+        text: str,
+        voice: str = "af_bella",
+        speed: float = 1.0,
+        response_format: str = "mp3",
+    ) -> bytes:
+        """Synthesize using Kokoro TTS (delegated to original client)"""
+        if not self._kokoro_client:
+            raise RuntimeError(f"{self.name} not initialized - call initialize() first")
+
+        return await self._kokoro_client.synthesize_chunk(
+            text=text,
+            voice=voice,
+            speed=speed,
+            response_format=response_format
+        )
+
+
 class TTSProviderManager:
     """
     Multi-provider TTS manager with automatic fallback.
@@ -254,9 +299,7 @@ class TTSProviderManager:
         provider_order = [p.strip().lower() for p in settings.tts_provider.split(",")]
         logger.info(f"[TTSProviderManager] Provider priority: {provider_order}")
 
-        # Initialize providers
-        from app.core.tts import KokoroTTSClient
-
+        # Initialize providers (no imports needed - all providers are in this file)
         for provider_name in provider_order:
             if provider_name == "google":
                 if settings.google_cloud_project_id:
@@ -272,9 +315,9 @@ class TTSProviderManager:
                 logger.info("[TTSProviderManager] Added Piper TTS")
 
             elif provider_name == "kokoro":
-                self.providers.append(KokoroTTSClient())
+                self.providers.append(KokoroTTSAdapter())
                 self.provider_names.append("kokoro")
-                logger.info("[TTSProviderManager] Added Kokoro TTS")
+                logger.info("[TTSProviderManager] Added Kokoro TTS (via adapter)")
 
             else:
                 logger.warning(f"[TTSProviderManager] Unknown provider '{provider_name}' - skipping")
