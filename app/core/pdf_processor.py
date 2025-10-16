@@ -93,8 +93,9 @@ class DoclingPDFProcessor:
                 images_metadata.append({
                     "page": picture.prov[0].page_no if picture.prov else 0,
                     "position": self._estimate_position(picture),
-                    "caption": picture.caption or None,
-                    "obj_name": picture.self_ref
+                    # Docling 2.9 compatibility: caption may not exist
+                    "caption": getattr(picture, 'caption', None),
+                    "obj_name": getattr(picture, 'self_ref', None)
                 })
 
             logger.info(f"Found {len(images_metadata)} images in PDF")
