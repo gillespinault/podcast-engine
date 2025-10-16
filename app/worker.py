@@ -371,13 +371,13 @@ async def _process_chapter_to_audio(
         safe_title = "".join(c if c.isalnum() or c in [' ', '-', '_'] else '' for c in chapter_title)
         safe_title = safe_title.replace(' ', '-').lower()[:50]  # Max 50 chars
 
-        chapter_filename = f"{chapter_num:02d}-{safe_title}.m4a"
+        chapter_filename = f"{chapter_num:02d}-{safe_title}.m4b"
         chapter_output_path = output_dir / chapter_filename
 
         merged_audio = await audio_processor.merge_audio_files(
             input_files=audio_files,
             output_path=chapter_output_path,
-            format="m4a",  # Always M4A for chapters
+            format="m4b",  # M4B audiobook format for chapters
             bitrate=podcast_req.audio_options.bitrate,
             sample_rate=podcast_req.audio_options.sample_rate,
             channels=podcast_req.audio_options.channels,
@@ -606,7 +606,7 @@ async def _process_multi_file_audiobook(
                 # Copy all chapter files + cover to AudioBookshelf
                 import shutil
                 files_copied = 0
-                for chapter_file in audiobook_dir.glob("*.m4a"):
+                for chapter_file in audiobook_dir.glob("*.m4b"):
                     dest_file = abs_dest_dir / chapter_file.name
                     shutil.copy2(chapter_file, dest_file)
                     files_copied += 1

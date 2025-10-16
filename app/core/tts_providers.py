@@ -116,6 +116,13 @@ class GoogleCloudTTSClient(BaseTTSClient):
             logger.error(f"[{self.name}] Failed to initialize: {e}")
             raise
 
+    async def close(self):
+        """Close Google Cloud TTS client (uses sync close(), not aclose())"""
+        if self.client:
+            # Google Cloud TTS async client uses close() not aclose()
+            self.client.close()
+            logger.debug(f"[{self.name}] Client closed successfully")
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=30),
