@@ -31,7 +31,7 @@ from app.api.models import (
     ProcessingOptions,
 )
 from app.core.chunking import TextChunker
-from app.core.tts import KokoroTTSClient
+from app.core.tts_providers import TTSProviderManager
 from app.core.audio import AudioProcessor
 from app.core.pdf_processor import SimplePDFProcessor, validate_pdf, PDFValidationError
 from app.llm.gemini import GeminiClient
@@ -54,20 +54,20 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"🚀 Starting {settings.app_name} v{settings.app_version}")
 
-    # Initialize global TTS client
-    app.state.tts_client = KokoroTTSClient()
+    # Initialize global TTS client (multi-provider: Google Cloud TTS, Piper, Kokoro)
+    app.state.tts_client = TTSProviderManager()
+    await app.state.tts_client.initialize()
+    logger.info(f"✓ TTS Providers initialized: {', '.join([p.name for p in app.state.tts_client.providers])}")
 
-    # Fetch available voices dynamically
-    logger.info("Fetching available voices from Kokoro TTS...")
-    app.state.available_voices = await app.state.tts_client.get_available_voices()
-    logger.info(f"✓ Loaded {len(app.state.available_voices)} voices")
+    # Set empty available_voices (multi-provider system uses provider-specific voices)
+    app.state.available_voices = {}
 
     # Verify storage directories exist
     Path(settings.temp_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.final_dir).mkdir(parents=True, exist_ok=True)
 
     logger.info(f"✓ Storage: {settings.storage_base_path}")
-    logger.info(f"✓ Kokoro TTS: {settings.kokoro_tts_url}")
+    logger.info(f"✓ TTS Provider Priority: {settings.tts_provider}")
 
     app.state.start_time = time.time()
 
@@ -997,7 +997,8 @@ async def _process_podcast_job_async(
 
         # CRITICAL FIX: Create dedicated TTS client for this job to avoid shared httpx.AsyncClient deadlocks
         # When multiple jobs run concurrently, sharing app_state.tts_client causes connection pool exhaustion
-        tts_client = KokoroTTSClient()
+        tts_client = TTSProviderManager()
+        await tts_client.initialize()
 
         try:
             tts_results = await tts_client.synthesize_chunks_parallel(
