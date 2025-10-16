@@ -67,6 +67,22 @@ class GoogleCloudTTSClient(BaseTTSClient):
         self.voice_name = settings.google_tts_voice
         self.api_endpoint = f"https://texttospeech.googleapis.com/v1/text:synthesize"
 
+        # Map Kokoro/common voices to Google Cloud TTS voices
+        self.voice_map = {
+            # French voices (Kokoro ff_* → Google fr-FR-Neural2-*)
+            "ff_siwis": "fr-FR-Neural2-A",  # French female
+            "french": "fr-FR-Neural2-A",
+            "ff_bella": "fr-FR-Neural2-C",
+            "ff_sarah": "fr-FR-Neural2-E",
+            # English voices (Kokoro af_* → Google en-US-Neural2-*)
+            "af_bella": "en-US-Neural2-F",  # American female
+            "af_sarah": "en-US-Neural2-H",
+            "am_adam": "en-US-Neural2-A",   # American male
+            "am_michael": "en-US-Neural2-D",
+            # Default fallback
+            "default": "fr-FR-Neural2-A",
+        }
+
     async def initialize(self):
         """Initialize Google Cloud TTS client"""
         # Import google-cloud-texttospeech only when needed
@@ -117,8 +133,18 @@ class GoogleCloudTTSClient(BaseTTSClient):
         try:
             from google.cloud import texttospeech
 
-            # Use configured voice or default French Neural2
-            voice_name = voice if voice else self.voice_name
+            # Map Kokoro voice to Google voice, or use configured default
+            if voice and voice in self.voice_map:
+                voice_name = self.voice_map[voice]
+                logger.debug(f"[{self.name}] Mapped voice '{voice}' → '{voice_name}'")
+            elif voice:
+                # Voice not in map - try to use it directly (might be a native Google voice)
+                voice_name = voice
+                logger.debug(f"[{self.name}] Using unmapped voice '{voice}' (native Google voice?)")
+            else:
+                # No voice specified - use configured default
+                voice_name = self.voice_name
+                logger.debug(f"[{self.name}] Using default voice '{voice_name}'")
 
             # Prepare synthesis input
             synthesis_input = texttospeech.SynthesisInput(text=text)
