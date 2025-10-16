@@ -33,7 +33,7 @@ class GeminiClient:
     """
 
     def __init__(self):
-        """Initialize Gemini API client"""
+        """Initialize Gemini API client with dual models"""
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key:
             raise ValueError(
@@ -41,9 +41,16 @@ class GeminiClient:
             )
 
         genai.configure(api_key=api_key)
-        model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
-        self.model = genai.GenerativeModel(model_name)
-        logger.info(f"Gemini client initialized (model: {model_name})")
+
+        # Main model for heavy analysis (PDF processing, chaptering)
+        main_model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+        self.model = genai.GenerativeModel(main_model_name)
+
+        # Fast model for quick metadata extraction (autofill)
+        flash_model_name = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.0-flash-exp")
+        self.flash_model = genai.GenerativeModel(flash_model_name)
+
+        logger.info(f"Gemini client initialized (main: {main_model_name}, flash: {flash_model_name})")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -483,11 +490,11 @@ You are an expert at analyzing documents and extracting metadata.
 - All fields are required (use "Unknown" or null if information not available)
 """
 
-        logger.info(f"Sending text to Gemini for metadata extraction (text_length={len(text_sample)})")
+        logger.info(f"Sending text to Gemini Flash for metadata extraction (text_length={len(text_sample)})")
 
         try:
-            response = self.model.generate_content(prompt)
-            logger.info("Gemini metadata extraction complete, parsing response")
+            response = self.flash_model.generate_content(prompt)
+            logger.info("Gemini Flash metadata extraction complete, parsing response")
 
             # Try to parse JSON response
             result = self._parse_gemini_response(response.text)
@@ -821,11 +828,11 @@ You are an expert at analyzing documents and extracting metadata.
 - All fields are required (use "Unknown" or null if information not available)
 """
 
-        logger.info(f"Sending PDF to Gemini for metadata extraction (file: {pdf_file.name})")
+        logger.info(f"Sending PDF to Gemini Flash for metadata extraction (file: {pdf_file.name})")
 
         try:
-            response = self.model.generate_content([pdf_file, prompt])
-            logger.info("Gemini PDF metadata extraction complete, parsing response")
+            response = self.flash_model.generate_content([pdf_file, prompt])
+            logger.info("Gemini Flash PDF metadata extraction complete, parsing response")
 
             # Parse JSON response
             result = self._parse_gemini_response(response.text)
