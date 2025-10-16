@@ -208,18 +208,43 @@
                     Voice & Audio Settings
                 </h2>
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- TTS Provider Selector -->
+                    <div class="md:col-span-3">
+                        <label class="block text-sm font-medium mb-2">TTS Provider</label>
+                        <select
+                            x-model="form.tts_options.provider"
+                            class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
+                        >
+                            <option :value="null">🔄 Automatic Fallback (Recommended)</option>
+                            <template x-for="provider in providers" :key="provider.id">
+                                <option
+                                    :value="provider.id"
+                                    x-text="`${provider.name} - ${provider.description}`"
+                                    :disabled="!provider.available"
+                                ></option>
+                            </template>
+                        </select>
+                        <p class="text-xs text-gray-400 mt-1">
+                            <span x-show="form.tts_options.provider === null">Will try providers in priority order until success</span>
+                            <span x-show="form.tts_options.provider !== null" x-text="`Using ${providers.find(p => p.id === form.tts_options.provider)?.name || 'selected provider'} exclusively`"></span>
+                        </p>
+                    </div>
+
+                    <!-- Voice Selector -->
                     <div class="md:col-span-2">
                         <label class="block text-sm font-medium mb-2">Voice</label>
                         <select
                             x-model="form.tts_options.voice"
                             class="w-full bg-gray-700 text-gray-100 rounded-lg p-3 border border-gray-600 focus:border-green-500 focus:ring-2 focus:ring-green-500 focus:outline-none"
                         >
-                            <template x-for="(voiceInfo, voiceId) in availableVoices" :key="voiceId">
-                                <option :value="voiceId" x-text="`${voiceInfo.name} (${voiceInfo.gender}, ${voiceInfo.accent})`"></option>
+                            <template x-for="voice in availableVoices" :key="voice.id">
+                                <option :value="voice.id" x-text="`${voice.name} (${voice.gender}, ${voice.language.toUpperCase()}) - ${voice.provider}`"></option>
                             </template>
                         </select>
-                        <p class="text-xs text-gray-400 mt-1" x-text="`${Object.keys(availableVoices).length} voices available`"></p>
+                        <p class="text-xs text-gray-400 mt-1" x-text="`${availableVoices.length} voice(s) available`"></p>
                     </div>
+
+                    <!-- Speed Selector -->
                     <div>
                         <label class="block text-sm font-medium mb-2">Speed</label>
                         <input
@@ -459,6 +484,7 @@
                         narrator: 'Kokoro TTS',
                     },
                     tts_options: {
+                        provider: null,  // TTS provider (null = automatic fallback)
                         voice: '{{ default_voice }}',
                         speed: {{ default_speed }},
                         chunk_size: 4000,
@@ -480,6 +506,7 @@
                         return_binary: false,
                     }
                 },
+                providers: [],
                 allVoices: {},
                 availableVoices: {},
                 isProcessing: false,
@@ -490,12 +517,20 @@
                 jobPollingInterval: null,
 
                 async init() {
+                    // Fetch TTS providers first
+                    await this.fetchProviders();
+
                     // Fetch all voices on component init
                     await this.fetchVoices();
 
                     // Watch for language changes
                     this.$watch('form.metadata.language', (newLang) => {
-                        this.filterVoicesByLanguage(newLang);
+                        this.fetchVoices();
+                    });
+
+                    // Watch for provider changes
+                    this.$watch('form.tts_options.provider', (newProvider) => {
+                        this.fetchVoices();
                     });
 
                     // Start job polling
@@ -512,32 +547,49 @@
                     }
                 },
 
-                async fetchVoices() {
+                async fetchProviders() {
                     try {
-                        const response = await fetch('/api/v1/voices');
+                        const response = await fetch('/api/v1/tts/providers');
                         if (response.ok) {
-                            this.allVoices = await response.json();
-                            this.filterVoicesByLanguage(this.form.metadata.language);
+                            const data = await response.json();
+                            this.providers = data.providers || [];
+
+                            // Set default provider if none selected
+                            if (!this.form.tts_options.provider && data.default_provider) {
+                                this.form.tts_options.provider = data.default_provider;
+                            }
                         }
                     } catch (err) {
-                        console.error('Failed to fetch voices:', err);
+                        console.error('Failed to fetch TTS providers:', err);
                     }
                 },
 
-                filterVoicesByLanguage(language) {
-                    // Filter voices by selected language
-                    this.availableVoices = Object.fromEntries(
-                        Object.entries(this.allVoices).filter(([voiceId, voiceInfo]) =>
-                            voiceInfo.language === language
-                        )
-                    );
-
-                    // If current voice is not in filtered list, select first available
-                    if (!this.availableVoices[this.form.tts_options.voice]) {
-                        const firstVoice = Object.keys(this.availableVoices)[0];
-                        if (firstVoice) {
-                            this.form.tts_options.voice = firstVoice;
+                async fetchVoices() {
+                    try {
+                        // Build query params (filter by provider and/or language)
+                        const params = new URLSearchParams();
+                        if (this.form.tts_options.provider) {
+                            params.append('provider', this.form.tts_options.provider);
                         }
+                        if (this.form.metadata.language) {
+                            params.append('language', this.form.metadata.language);
+                        }
+
+                        const url = `/api/v1/tts/voices${params.toString() ? '?' + params.toString() : ''}`;
+                        const response = await fetch(url);
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            this.availableVoices = data.voices || [];
+
+                            // If current voice is not in filtered list, select first available
+                            const currentVoiceExists = this.availableVoices.some(v => v.id === this.form.tts_options.voice);
+                            if (!currentVoiceExists && this.availableVoices.length > 0) {
+                                this.form.tts_options.voice = this.availableVoices[0].id;
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Failed to fetch voices:', err);
                     }
                 },
 
